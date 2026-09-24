@@ -1,0 +1,14 @@
+# /** matches the node in any namespace (gazebo_multi.launch.py runs one per robot).
+/**/controller_node:
+  ros__parameters:
+    v_star: 0.5        # [m/s]
+    d_switch: 0.5      # D [m]
+    k_v: 1.0           # [1/s]
+    k_w: 2.0           # [1/s]
+    epsilon: 0.05      # [m]
+    spacing: 0.5       # follower: distance from the leader to its goal [m]
+    v_max: 0.6         # clamp applied to v after control() [m/s]
+    w_max: 2.0         # clamp applied to w after control() [rad/s]
+    pose_timeout: 0.5  # zero command when the last pose is older than this [s]
+    rate: 50.0         # [Hz]
+

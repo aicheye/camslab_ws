@@ -1,0 +1,70 @@
+# Base RViz config for gazebo_multi.launch.py. The launch file adds one RobotModel display
+# per robot in the fleet file (topic /<name>/robot_description, TF prefix <name>) and passes
+# the result to rviz2. Fixed frame `map` (REP-105); the view looks along +y like the web UI.
+Panels:
+  - Class: rviz_common/Displays
+    Name: Displays
+  - Class: rviz_common/Views
+    Name: Views
+Visualization Manager:
+  Class: ""
+  Displays:
+    - Class: rviz_default_plugins/Grid
+      Name: Grid
+      Enabled: true
+      Cell Size: 1
+      Plane Cell Count: 6
+      Offset: {X: 3, Y: 3, Z: 0}
+      Reference Frame: <Fixed Frame>
+      Value: true
+    - Class: rviz_default_plugins/TF
+      Name: TF
+      Enabled: true
+      Show Arrows: false
+      Show Axes: true
+      Show Names: true
+      Marker Scale: 0.4
+      Value: true
+    - Class: rviz_default_plugins/Pose
+      Name: goal
+      Enabled: true
+      Topic:
+        Value: /goal
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+      Shape: Arrow
+      Color: 235; 104; 52
+      Shaft Length: 0.25
+      Shaft Radius: 0.02
+      Head Length: 0.08
+      Head Radius: 0.05
+      Value: true
+  Global Options:
+    Fixed Frame: map
+    Background Color: 48; 48; 48
+    Frame Rate: 30
+  Tools:
+    - Class: rviz_default_plugins/Interact
+    - Class: rviz_default_plugins/MoveCamera
+    - Class: rviz_default_plugins/Select
+    - Class: rviz_default_plugins/Measure
+    # 2D Goal Pose (G) publishes the leader's goal directly; the heading is ignored.
+    - Class: rviz_default_plugins/SetGoal
+      Topic:
+        Value: /goal
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+  Views:
+    Current:
+      Class: rviz_default_plugins/Orbit
+      Name: Current View
+      Distance: 7
+      Focal Point: {X: 3, Y: 2.5, Z: 0}
+      Pitch: 0.9
+      Yaw: 4.712
+    Saved: ~
+  Value: true

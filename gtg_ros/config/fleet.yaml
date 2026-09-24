@@ -1,0 +1,16 @@
+# Robots for gazebo_multi.launch.py. Pass another file with fleet:=/path/to/file.yaml.
+#
+# name     robot name: its namespace (/<name>/pose), Gazebo model, and TF prefix
+#          (<name>/base_link). Lowercase letters, digits, and _; starts with a letter.
+# follows  name of the robot whose follow_goal this robot drives to.
+#          Omit it on exactly one robot, the leader, which drives to /goal.
+# x, y     spawn position [m]
+# yaw      spawn heading [rad], default 0
+# color    RViz body colour, default green. A name (green, red, blue, orange, yellow,
+#          purple, cyan, pink, white, grey, black) or [r, g, b] / [r, g, b, a] in [0, 1].
+#          Gazebo keeps the model.sdf colour.
+robots:
+  - {name: angostura, x: 2.5, y: 1.0, color: green}
+  - {name: bodies, follows: angostura, x: 1.9, y: 1.0, color: blue}
+  - {name: cologne, follows: bodies, x: 1.3, y: 1.0, color: orange}
+  - {name: estranged, follows: cologne, x: 0.7, y: 1.0, color: purple}

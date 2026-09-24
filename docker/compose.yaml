@@ -1,0 +1,32 @@
+# ROS 2 Humble shell with the repo mounted as /ws/src/go-to-goal.
+#   docker compose -f docker/compose.yaml run --rm ros
+services:
+  ros:
+    build: .
+    image: gtg-ros:humble
+    network_mode: host   # web UI on localhost:8000
+    ipc: host
+    environment:
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      # Gazebo transport ignores ROS_DOMAIN_ID and every container shares the host network,
+      # so Gazebo sims in different domains would see each other's topics without this.
+      - IGN_PARTITION=gtg_${ROS_DOMAIN_ID:-0}
+      - DISPLAY=${DISPLAY:-:0}   # Gazebo GUI through the host X server (run `xhost +local:` first)
+      - QT_X11_NO_MITSHM=1
+    devices:
+      - /dev/dri:/dev/dri        # GPU rendering for the Gazebo GUI
+    security_opt:
+      - label=disable            # SELinux: allow the X11 socket without relabelling it
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      - ..:/ws/src/go-to-goal:z
+      - ws_build:/ws/build
+      - ws_install:/ws/install
+      - ws_log:/ws/log
+    working_dir: /ws
+    command: bash
+
+volumes:
+  ws_build:
+  ws_install:
+  ws_log:

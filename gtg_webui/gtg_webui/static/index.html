@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Go to goal</title>
+  <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+  <header>
+    <h1>Go to goal</h1>
+    <span id="backend" class="badge">not connected</span>
+    <span id="status" class="status" data-state="idle">
+      <span id="status-icon" aria-hidden="true">●</span>
+      <span id="status-text">idle</span>
+    </span>
+    <span id="status-message" class="muted"></span>
+    <span class="spacer"></span>
+    <span id="conn" class="muted">connecting</span>
+  </header>
+
+  <main>
+    <section class="card world-card">
+      <div class="card-head">
+        <h2>Global frame</h2>
+        <span class="muted">click: set goal p* · drag: pan · wheel: zoom</span>
+        <span class="spacer"></span>
+        <button id="fit" type="button">Fit</button>
+        <button id="view-reset" type="button">Reset view</button>
+      </div>
+      <div class="world-wrap"><canvas id="world"></canvas></div>
+      <div id="playback" class="playback">
+        <button id="play" type="button">Pause</button>
+        <input id="scrub" type="range" min="0" max="0" value="0" aria-label="Playback position">
+        <label>speed
+          <select id="speed">
+            <option value="1">1×</option>
+            <option value="2" selected>2×</option>
+            <option value="5">5×</option>
+            <option value="0">instant</option>
+          </select>
+        </label>
+      </div>
+      <dl class="readout">
+        <div><dt>t</dt><dd id="r-t">-</dd></div>
+        <div><dt>x</dt><dd id="r-x">-</dd></div>
+        <div><dt>y</dt><dd id="r-y">-</dd></div>
+        <div><dt>θ</dt><dd id="r-th">-</dd></div>
+        <div><dt>‖p* − p‖</dt><dd id="r-d">-</dd></div>
+        <div><dt>v</dt><dd id="r-v">-</dd></div>
+        <div><dt>ω</dt><dd id="r-w">-</dd></div>
+      </dl>
+    </section>
+
+    <section class="side">
+      <div class="card">
+        <div class="buttons">
+          <button id="start" type="button" class="primary">Start</button>
+          <button id="stop" type="button" class="danger">Stop</button>
+          <button id="reset" type="button">Reset</button>
+          <span class="spacer"></span>
+          <button id="csv" type="button">Download CSV</button>
+        </div>
+        <div class="fields">
+          <fieldset>
+            <legend>Goal p* [m]</legend>
+            <label>x <input id="goal-x" type="number" step="0.1"></label>
+            <label>y <input id="goal-y" type="number" step="0.1"></label>
+          </fieldset>
+          <fieldset id="initial-set">
+            <legend>Initial pose</legend>
+            <label>x <input id="init-x" type="number" step="0.1"></label>
+            <label>y <input id="init-y" type="number" step="0.1"></label>
+            <label>θ [deg] <input id="init-th" type="number" step="5"></label>
+            <button id="init-random" type="button">Random</button>
+            <label><input id="init-random-on-start" type="checkbox"> random on Start</label>
+          </fieldset>
+          <fieldset>
+            <legend>Parameters</legend>
+            <div id="params" class="params"></div>
+          </fieldset>
+        </div>
+      </div>
+
+      <div class="card plots">
+        <label id="robot-pick" class="robot-pick" hidden>Plots for
+          <select id="robot-select"></select>
+        </label>
+        <figure>
+          <figcaption>Distance to goal ‖p* − p‖ [m]</figcaption>
+          <canvas id="plot-dist" class="plot"></canvas>
+        </figure>
+        <figure>
+          <figcaption>Linear velocity command v [m/s]</figcaption>
+          <canvas id="plot-v" class="plot"></canvas>
+        </figure>
+        <figure>
+          <figcaption>Angular velocity command ω [rad/s]</figcaption>
+          <canvas id="plot-w" class="plot"></canvas>
+        </figure>
+        <div class="muted axis-note">time [s]</div>
+      </div>
+    </section>
+  </main>
+
+  <div id="tooltip" class="tooltip" hidden></div>
+  <script src="static/app.js"></script>
+</body>
+</html>

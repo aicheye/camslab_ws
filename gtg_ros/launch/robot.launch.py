@@ -1,0 +1,83 @@
+"""One Yahboom R2 in a running Gazebo world, in namespace <name>.
+
+    ros2 launch gtg_ros robot.launch.py name:=badger x:=1.9 y:=1.0 goal_topic:=/axolotl/follow_goal
+
+gazebo_multi.launch.py includes this once per robot in the fleet file. Everything below
+runs in namespace <name>:
+
+  Gazebo model <name>, spawned into the world `gtg`
+  parameter_bridge   /model/<name>/pose -> pose,  cmd_vel -> /model/<name>/cmd_vel,
+                     /world/<world>/model/<name>/joint_state -> gazebo/joint_states
+  controller_node    pose, goal (remapped to goal_topic) -> cmd_vel, follow_goal
+  joint_state_publisher   republishes gazebo/joint_states on joint_states, stamped
+                          with wall time (Gazebo stamps with simulation time)
+  robot_state_publisher   r2.urdf.xacro (body colour `color`) + joint_states -> TF <name>/<link>
+  pose_tf_node       pose -> TF map -> <name>/base_footprint
+"""
+
+import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, GroupAction
+from launch.substitutions import Command, LaunchConfiguration
+from launch_ros.actions import Node, PushRosNamespace
+from launch_ros.parameter_descriptions import ParameterValue
+
+
+def generate_launch_description():
+    share = get_package_share_directory("gtg_ros")
+    name = LaunchConfiguration("name")
+    world = LaunchConfiguration("world")
+    robot_description = ParameterValue(
+        Command(["xacro ", os.path.join(share, "urdf", "r2.urdf.xacro"),
+                 " body_color:='", LaunchConfiguration("color"), "'"]), value_type=str)
+
+    return LaunchDescription([
+        DeclareLaunchArgument("name", description="robot name: namespace, Gazebo model, TF prefix"),
+        DeclareLaunchArgument("x", default_value="0.0", description="spawn x [m]"),
+        DeclareLaunchArgument("y", default_value="0.0", description="spawn y [m]"),
+        DeclareLaunchArgument("yaw", default_value="0.0", description="spawn heading [rad]"),
+        DeclareLaunchArgument("goal_topic", default_value="/goal",
+                              description="topic the controller drives to"),
+        DeclareLaunchArgument("params", default_value=os.path.join(share, "config", "params.yaml"),
+                              description="controller parameter file"),
+        DeclareLaunchArgument("color", default_value="0 0.63 0.24 1",
+                              description="RViz body colour \"r g b a\" in [0, 1]"),
+        DeclareLaunchArgument("world", default_value="gtg", description="Gazebo world name"),
+        DeclareLaunchArgument("start_enabled", default_value="true",
+                              description="controller drives as soon as it has a goal"),
+
+        GroupAction([
+            PushRosNamespace(name),
+            Node(package="ros_gz_sim", executable="create", output="screen",
+                 arguments=["-world", world, "-name", name,
+                            "-file", os.path.join(share, "models", "r2", "model.sdf"),
+                            "-x", LaunchConfiguration("x"), "-y", LaunchConfiguration("y"),
+                            "-z", "0.01", "-Y", LaunchConfiguration("yaw")]),
+            Node(package="ros_gz_bridge", executable="parameter_bridge", output="screen",
+                 # A list of substitutions is concatenated into one string.
+                 arguments=[["/model/", name,
+                             "/pose@geometry_msgs/msg/PoseStamped[ignition.msgs.Pose"],
+                            ["/model/", name,
+                             "/cmd_vel@geometry_msgs/msg/Twist]ignition.msgs.Twist"],
+                            ["/world/", world, "/model/", name,
+                             "/joint_state@sensor_msgs/msg/JointState[ignition.msgs.Model"]],
+                 remappings=[(["/model/", name, "/pose"], "pose"),
+                             (["/model/", name, "/cmd_vel"], "cmd_vel"),
+                             (["/world/", world, "/model/", name, "/joint_state"],
+                              "gazebo/joint_states")]),
+            Node(package="gtg_ros", executable="controller_node", output="screen",
+                 parameters=[LaunchConfiguration("params"),
+                             {"start_enabled": ParameterValue(
+                                 LaunchConfiguration("start_enabled"), value_type=bool)}],
+                 remappings=[("goal", LaunchConfiguration("goal_topic"))]),
+            Node(package="robot_state_publisher", executable="robot_state_publisher",
+                 parameters=[{"robot_description": robot_description,
+                              "frame_prefix": [name, "/"]}]),
+            Node(package="joint_state_publisher", executable="joint_state_publisher",
+                 parameters=[{"source_list": ["gazebo/joint_states"], "rate": 30}]),
+            Node(package="gtg_ros", executable="pose_tf_node",
+                 parameters=[{"child_frame": [name, "/base_footprint"]}]),
+        ]),
+    ])

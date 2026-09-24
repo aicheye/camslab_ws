@@ -1,0 +1,26 @@
+[project]
+name = "gtg-sim"
+version = "0.1.0"
+description = "Closed-loop offline simulation of the go-to-goal controller."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "gtg-webui",
+]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.uv.sources]
+gtg-webui = { path = "../gtg_webui", editable = true }
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["gtg_sim"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
