@@ -18,7 +18,8 @@ Both serve the same web UI (`camslab_webui/`) on http://localhost:8000.
 
 ## What is left to implement
 
-The circle, `reference()`, `control()` and `step()` are written in Python and C++. Left:
+The circle, `reference()` and `control()` are written in Python and C++, and `step()` in
+Python. Left:
 
 | File | Function |
 |---|---|
@@ -37,7 +38,7 @@ plant: [docs/ode-hints.md](docs/ode-hints.md).
 ### Limits
 
 Before a run, `check_limits()` (Python) and `checkLimits()` (C++) sample `reference()`
-and reject a trajectory with `|kappa*| > kappa_max` or `|w*| > w_max`. The default
+over `[0, t_max]` and reject a trajectory with `|kappa*| > kappa_max` or `|w*| > w_max`. The default
 `kappa_max = 2.9 1/m` is the R2's turning limit `tan(0.6) / 0.235`. The Gerono default
 `a = 2 m` peaks at `|kappa*| = 2.4 1/m`; `a = 1.5 m` would reach 3.2 1/m and is rejected.
 
@@ -60,10 +61,11 @@ The robot starts at a random pose (x and y in 0 to 4 m, any heading). Pass
 `camslab_sim/types.py` `Params`; `(x0, y0, theta0)` is the circle's start pose and the
 Gerono's centre and axis.
 
-`simulate.py` is a fixed-step loop: evaluate `reference()` at t, sample `control()`, hold
-`(v, w)` over `dt`, call `step()`. Start returns the whole run and the UI plays it back
-with the reference path dashed and p* as a cross. The unicycle model has no turning
-limit, unlike the Ackermann car in Gazebo.
+`simulate.py` is a fixed-step loop: evaluate `reference()` at t, sample `control()`, clamp
+`(v, w)` the same way as the ROS `controller`, hold it over `dt`, call `step()`. The default
+`dt = 0.02 s` is the Gazebo controller's 50 Hz, and the default `t_max = 60 s` matches the
+controller's `t_max`. Start returns the whole run and the UI plays it back with the
+reference path dashed and p* as a cross.
 
 ## Gazebo + RViz
 

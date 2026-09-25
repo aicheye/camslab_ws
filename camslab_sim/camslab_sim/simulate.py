@@ -1,5 +1,5 @@
-"""Fixed-step closed loop: sample the reference and the controller, hold the command over
-dt, step the plant."""
+"""Fixed-step closed loop: sample the reference and the controller, clamp the command,
+hold it over dt, step the plant."""
 
 import numpy as np
 
@@ -7,6 +7,14 @@ from .controller import control
 from .plant import step
 from .trajectory import check_limits, make_shape, reference
 from .types import Params, State
+
+
+def clamp(v: float, w: float, params: Params):
+    """Clamp to |v| <= v_max and |w| <= min(w_max, kappa_max |v|), the turning limit of the
+    Ackermann car. Same clamp as the ROS controller node."""
+    v = min(max(v, -params.v_max), params.v_max)
+    w_limit = min(params.w_max, params.kappa_max * abs(v))
+    return v, min(max(w, -w_limit), w_limit)
 
 
 def simulate(initial: State, params: Params, dt: float, t_max: float):
@@ -23,7 +31,7 @@ def simulate(initial: State, params: Params, dt: float, t_max: float):
     for k in range(int(round(t_max / dt)) + 1):
         t = k * dt
         ref = reference(shape, t)
-        v, w = control(state, ref, params)
+        v, w = clamp(*control(state, ref, params), params)
         dist = float(np.linalg.norm(ref.p - state.p))
         samples.append([t, float(state.p[0]), float(state.p[1]),
                         float(state.q[0]), float(state.q[1]), float(v), float(w), dist,

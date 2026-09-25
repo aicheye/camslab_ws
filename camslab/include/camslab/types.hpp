@@ -83,9 +83,12 @@ struct Params
   double k_perp{4.0};  // k_perp [1/m^2]
   double k_q{2.0};     // k_q [1/s]
 
-  // Limits the reference must stay inside (checkLimits in trajectory.hpp).
-  double kappa_max{2.9};  // |kappa*| [1/m]; the R2 turns at most tan(0.6) / 0.235
-  double w_max{2.0};      // |w*| [rad/s]
+  // Limits. The reference must keep |kappa*| <= kappa_max and |w*| <= w_max
+  // (checkLimits in trajectory.hpp), and the controller node clamps every command to
+  // |v| <= v_max, |w| <= min(w_max, kappa_max |v|).
+  double kappa_max{2.9};  // [1/m]; the R2 turns at most tan(0.6) / 0.235
+  double w_max{2.0};      // [rad/s]
+  double v_max{0.6};      // [m/s]
 };
 
 }  // namespace camslab

@@ -13,7 +13,7 @@ from .types import SHAPES, Params, State
 
 log = logging.getLogger("camslab_sim")
 
-RANDOM_TRIES = 200
+RANDOM_TRIES = 50
 
 
 class SimBackend(Backend):

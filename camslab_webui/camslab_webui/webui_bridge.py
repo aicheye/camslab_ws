@@ -35,7 +35,7 @@ from .server import Backend, UiServer, fleet_msg, hello_msg, samples_msg, status
 
 # Controller parameters shown in the UI. shape is a string, the rest are doubles.
 PARAM_NAMES = ["shape", "x0", "y0", "theta0", "circle_speed", "kappa", "a", "period",
-               "k_par", "k_perp", "k_q", "kappa_max", "w_max", "v_max", "path_time"]
+               "k_par", "k_perp", "k_q", "kappa_max", "w_max", "v_max", "t_max"]
 MAX_SAMPLES = 20000
 # Poses arrive every 10 ms, so a sample due at 40 ms can read as 39.99 ms after float
 # rounding. Accepting 5 ms early keeps 25 Hz from dropping to 20 Hz.

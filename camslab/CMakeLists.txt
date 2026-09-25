@@ -12,8 +12,8 @@ find_package(std_srvs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(nav_msgs REQUIRED)
 
-# Control law, reference trajectories, and plant model, without ROS dependencies.
-add_library(camslab_core STATIC src/controller.cpp src/plant.cpp src/trajectory.cpp)
+# Control law and reference trajectories, without ROS dependencies.
+add_library(camslab_core STATIC src/controller.cpp src/trajectory.cpp)
 target_include_directories(camslab_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 target_compile_features(camslab_core PUBLIC cxx_std_17)

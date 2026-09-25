@@ -5,16 +5,16 @@
 // Publishes:  cmd_vel (geometry_msgs/Twist),
 //             ref_pose (geometry_msgs/PoseStamped): p* and q* now, while driving,
 //             ref_path (nav_msgs/Path, transient local): p*(t) for t in
-//             [0, path_time], on startup and whenever a trajectory parameter changes.
+//             [0, t_max], on startup and whenever a trajectory parameter changes.
 // Services:   ~/enable (std_srvs/SetBool). The node starts disabled unless start_enabled.
 //
 // The trajectory clock starts at the first tick that is enabled with a fresh pose, and
 // restarts on every enable and every trajectory parameter change. The node will not
-// enable while the trajectory breaks kappa_max or w_max over [0, path_time], and it
+// enable while the trajectory breaks kappa_max or w_max over [0, t_max], and it
 // rejects parameter changes that would break them.
 //
 // Every command is clamped to |v| <= v_max and |w| <= min(w_max, kappa_max |v|), the
-// turning limit of the Ackermann car.
+// turning limit of the Ackermann car. camslab_sim/simulate.py applies the same clamp.
 
 #include <algorithm>
 #include <cmath>
@@ -42,22 +42,12 @@ public:
   ControllerNode() : Node("controller")
   {
     params_.shape = declare_parameter("shape", params_.shape);
-    params_.x0 = declare_parameter("x0", params_.x0);
-    params_.y0 = declare_parameter("y0", params_.y0);
-    params_.theta0 = declare_parameter("theta0", params_.theta0);
-    params_.circle_speed = declare_parameter("circle_speed", params_.circle_speed);
-    params_.kappa = declare_parameter("kappa", params_.kappa);
-    params_.a = declare_parameter("a", params_.a);
-    params_.period = declare_parameter("period", params_.period);
-    params_.k_par = declare_parameter("k_par", params_.k_par);
-    params_.k_perp = declare_parameter("k_perp", params_.k_perp);
-    params_.k_q = declare_parameter("k_q", params_.k_q);
-    params_.kappa_max = declare_parameter("kappa_max", params_.kappa_max);
-    params_.w_max = declare_parameter("w_max", params_.w_max);
-    path_time_ = declare_parameter("path_time", 60.0);
-    frame_id_ = declare_parameter("frame_id", "map");
-    v_max_ = declare_parameter("v_max", 0.6);
+    for (const auto & f : kParamFields) {
+      params_.*f.field = declare_parameter(f.name, params_.*f.field);
+    }
+    t_max_ = declare_parameter("t_max", 60.0);
     pose_timeout_ = declare_parameter("pose_timeout", 0.5);
+    frame_id_ = declare_parameter("frame_id", "map");
     const bool start_enabled = declare_parameter("start_enabled", false);
     const double rate = declare_parameter("rate", 50.0);
 
@@ -97,18 +87,44 @@ public:
   }
 
 private:
-  // Checks the trajectory of `params` against the limits. Returns the problem, or an
-  // empty string. A trajectory whose functions are not written yet passes, so the node
-  // still starts; onTimer() then reports the not-implemented error.
-  std::string trajectoryProblem(const Params & params) const
+  // Double parameters that are fields of Params. `trajectory` is true when a change alters
+  // the reference or its limit check, so the node rechecks it and restarts the clock.
+  struct ParamField
+  {
+    const char * name;
+    double Params::*field;
+    bool trajectory;
+  };
+  static constexpr ParamField kParamFields[] = {
+    {"x0", &Params::x0, true},
+    {"y0", &Params::y0, true},
+    {"theta0", &Params::theta0, true},
+    {"circle_speed", &Params::circle_speed, true},
+    {"kappa", &Params::kappa, true},
+    {"a", &Params::a, true},
+    {"period", &Params::period, true},
+    {"kappa_max", &Params::kappa_max, true},
+    {"w_max", &Params::w_max, true},
+    {"k_par", &Params::k_par, false},
+    {"k_perp", &Params::k_perp, false},
+    {"k_q", &Params::k_q, false},
+    {"v_max", &Params::v_max, false},
+  };
+
+  // Zero commands are sent for this long after driving stops [s].
+  static constexpr double kZeroSeconds = 1.0;
+
+  // Checks the trajectory of `params` against the limits over [0, t_max]. Returns the
+  // problem, or an empty string. A trajectory whose functions are not written yet passes,
+  // so the node still starts; onTimer() then reports the not-implemented error.
+  std::string trajectoryProblem(const Params & params, double t_max) const
   {
     try {
-      const auto problem = checkLimits(*makeShape(params), params, path_time_);
+      const auto problem = checkLimits(*makeShape(params), params, t_max);
       return problem.value_or("");
-    } catch (const std::logic_error & e) {
-      if (dynamic_cast<const std::invalid_argument *>(&e)) {
-        return e.what();
-      }
+    } catch (const std::invalid_argument & e) {  // unknown shape
+      return e.what();
+    } catch (const std::logic_error &) {  // function not written yet
       return "";
     }
   }
@@ -117,7 +133,7 @@ private:
   void setTrajectory(const Params & params)
   {
     params_ = params;
-    trajectory_error_ = trajectoryProblem(params_);
+    trajectory_error_ = trajectoryProblem(params_, t_max_);
     t0_.reset();
     if (!trajectory_error_.empty()) {
       RCLCPP_ERROR(get_logger(), "trajectory rejected: %s", trajectory_error_.c_str());
@@ -133,7 +149,7 @@ private:
     try {
       constexpr int kPoints = 600;
       for (int i = 0; i <= kPoints; ++i) {
-        const Vec2 p = shape_->position(path_time_ * i / kPoints);
+        const Vec2 p = shape_->position(t_max_ * i / kPoints);
         geometry_msgs::msg::PoseStamped pose;
         pose.header = path.header;
         pose.pose.position.x = p.x;
@@ -188,90 +204,74 @@ private:
 
     geometry_msgs::msg::Twist twist;
     if (cmd && std::isfinite(cmd->v) && std::isfinite(cmd->w)) {
-      const double v = std::clamp(cmd->v, -v_max_, v_max_);
+      const double v = std::clamp(cmd->v, -params_.v_max, params_.v_max);
       const double w_limit = std::min(params_.w_max, params_.kappa_max * std::abs(v));
       twist.linear.x = v;
       twist.angular.z = std::clamp(cmd->w, -w_limit, w_limit);
-      zero_ticks_left_ = kZeroTicks;
+      last_drive_ = now();
       cmd_pub_->publish(twist);
-    } else if (zero_ticks_left_ > 0) {
-      // Zero is sent for a limited number of ticks after driving stops, so that
-      // another cmd_vel source can drive while this node is idle.
-      --zero_ticks_left_;
+    } else if (last_drive_ && (now() - *last_drive_).seconds() < kZeroSeconds) {
+      // Zero is sent for kZeroSeconds after driving stops, so that another cmd_vel
+      // source can drive while this node is idle.
       cmd_pub_->publish(twist);
     }
   }
 
+  // Adopts a set of changes only if the trajectory they give is inside the limits.
   rcl_interfaces::msg::SetParametersResult onParameters(
     const std::vector<rclcpp::Parameter> & changes)
   {
     rcl_interfaces::msg::SetParametersResult result;
     result.successful = true;
     Params params = params_;
-    double path_time = path_time_;
+    double t_max = t_max_;
+    double pose_timeout = pose_timeout_;
     bool trajectory_changed = false;
     for (const auto & change : changes) {
       const auto & name = change.get_name();
       if (name == "shape" && change.get_type() == rclcpp::ParameterType::PARAMETER_STRING) {
         params.shape = change.as_string();
         trajectory_changed = true;
-        continue;
       }
       if (change.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE) {
         continue;
       }
       const double value = change.as_double();
-      // Trajectory and limit parameters: checked below before they are adopted.
-      double * field = name == "x0"             ? &params.x0
-                       : name == "y0"           ? &params.y0
-                       : name == "theta0"       ? &params.theta0
-                       : name == "circle_speed" ? &params.circle_speed
-                       : name == "kappa"        ? &params.kappa
-                       : name == "a"            ? &params.a
-                       : name == "period"       ? &params.period
-                       : name == "kappa_max"    ? &params.kappa_max
-                       : name == "w_max"        ? &params.w_max
-                       : name == "path_time"    ? &path_time
-                                                : nullptr;
-      if (field) {
-        *field = value;
+      if (name == "t_max") {
+        t_max = value;
         trajectory_changed = true;
-      } else if (name == "k_par") {
-        params.k_par = value;
-      } else if (name == "k_perp") {
-        params.k_perp = value;
-      } else if (name == "k_q") {
-        params.k_q = value;
-      } else if (name == "v_max") {
-        v_max_ = value;
       } else if (name == "pose_timeout") {
-        pose_timeout_ = value;
+        pose_timeout = value;
+      }
+      for (const auto & f : kParamFields) {
+        if (name == f.name) {
+          params.*f.field = value;
+          trajectory_changed = trajectory_changed || f.trajectory;
+        }
       }
     }
-    if (!trajectory_changed) {
+    if (trajectory_changed) {
+      const std::string problem = trajectoryProblem(params, t_max);
+      if (!problem.empty()) {
+        result.successful = false;
+        result.reason = problem;
+        return result;
+      }
+    }
+    t_max_ = t_max;
+    pose_timeout_ = pose_timeout;
+    if (trajectory_changed) {
+      setTrajectory(params);
+    } else {
       params_ = params;
-      return result;
     }
-    const double old_path_time = path_time_;
-    path_time_ = path_time;
-    const std::string problem = trajectoryProblem(params);
-    if (!problem.empty()) {
-      path_time_ = old_path_time;
-      result.successful = false;
-      result.reason = problem;
-      return result;
-    }
-    setTrajectory(params);
     return result;
   }
-
-  static constexpr int kZeroTicks = 50;
 
   Params params_;
   std::unique_ptr<Shape> shape_;
   std::string trajectory_error_;
-  double path_time_;
-  double v_max_;
+  double t_max_;
   double pose_timeout_;
   std::string frame_id_;
 
@@ -279,7 +279,7 @@ private:
   State state_;
   std::optional<rclcpp::Time> pose_time_;
   std::optional<rclcpp::Time> t0_;  // trajectory time 0
-  int zero_ticks_left_{0};
+  std::optional<rclcpp::Time> last_drive_;
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr ref_pose_pub_;

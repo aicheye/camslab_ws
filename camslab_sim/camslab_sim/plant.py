@@ -11,17 +11,6 @@ import numpy as np
 from .types import State
 
 
-def derivatives(state: State, v: float, w: float):
-    """Return (dp/dt, dq/dt) for the inputs v [m/s] and w [rad/s]."""
-
-    S = np.array([[0.0, -1.0], [1.0, 0.0]])
-
-    p_dot = v * state.q
-    q_dot = w * np.dot(S, state.q)
-
-    return (p_dot, q_dot)
-
-
 def step(state: State, v: float, w: float, dt: float) -> State:
     """Return the state dt seconds later, with v and w held constant over dt."""
 

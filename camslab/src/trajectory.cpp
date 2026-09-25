@@ -89,30 +89,42 @@ std::unique_ptr<Shape> makeShape(const Params & params)
 std::optional<std::string> checkLimits(const Shape & shape, const Params & params, double t_end)
 {
   constexpr int kSamples = 2000;
-  char message[160];
+  double kappa_worst{0.0};
+  double t_kappa{0.0};
+  double w_worst{0.0};
+  double t_w{0.0};
   for (int i = 0; i <= kSamples; ++i) {
     const double t = t_end * i / kSamples;
     const Reference ref = reference(shape, t);
-    if (std::abs(ref.kappa) > params.kappa_max) {
-      std::snprintf(
-        message,
-        sizeof(message),
-        "|kappa*| = %.3f 1/m at t = %.2f s is above kappa_max = %.3f 1/m",
-        std::abs(ref.kappa),
-        t,
-        params.kappa_max);
-      return std::string(message);
+    if (std::abs(ref.kappa) > kappa_worst) {
+      kappa_worst = std::abs(ref.kappa);
+      t_kappa = t;
     }
-    if (std::abs(ref.w) > params.w_max) {
-      std::snprintf(
-        message,
-        sizeof(message),
-        "|w*| = %.3f rad/s at t = %.2f s is above w_max = %.3f rad/s",
-        std::abs(ref.w),
-        t,
-        params.w_max);
-      return std::string(message);
+    if (std::abs(ref.w) > w_worst) {
+      w_worst = std::abs(ref.w);
+      t_w = t;
     }
+  }
+  char message[160];
+  if (kappa_worst > params.kappa_max) {
+    std::snprintf(
+      message,
+      sizeof(message),
+      "|kappa*| = %.3f 1/m at t = %.2f s is above kappa_max = %.3f 1/m",
+      kappa_worst,
+      t_kappa,
+      params.kappa_max);
+    return std::string(message);
+  }
+  if (w_worst > params.w_max) {
+    std::snprintf(
+      message,
+      sizeof(message),
+      "|w*| = %.3f rad/s at t = %.2f s is above w_max = %.3f rad/s",
+      w_worst,
+      t_w,
+      params.w_max);
+    return std::string(message);
   }
   return std::nullopt;
 }

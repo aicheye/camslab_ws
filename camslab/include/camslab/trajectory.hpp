@@ -64,8 +64,8 @@ Reference reference(const Shape & shape, double t);
 // name.
 std::unique_ptr<Shape> makeShape(const Params & params);
 
-// Samples reference() on [0, t_end]. Returns a message if |kappa*| > kappa_max
-// or |w*| > w_max anywhere, nullopt if the trajectory is inside both limits.
+// Samples reference() on [0, t_end]. Returns a message naming the largest |kappa*|
+// or |w*| if it is above kappa_max or w_max, nullopt if the trajectory is inside both.
 std::optional<std::string> checkLimits(const Shape & shape, const Params & params, double t_end);
 
 }  // namespace camslab

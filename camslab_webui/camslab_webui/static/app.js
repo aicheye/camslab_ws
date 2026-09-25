@@ -25,7 +25,6 @@ const PARAM_LABELS = {
   kappa_max: 'κ max [1/m]',
   w_max: 'ω* max [rad/s]',
   v_max: 'v max [m/s]',
-  path_time: 'path time [s]',
   dt: 'dt [s]',
   t_max: 't max [s]',
 };

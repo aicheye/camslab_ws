@@ -5,8 +5,8 @@
 #          (<name>/base_link). Lowercase letters, digits, and _; starts with a letter.
 # x, y     spawn position [m]
 # yaw      spawn heading [rad], default 0
-# color    RViz body colour, default green. A name (green, red, blue, orange, yellow,
-#          purple, cyan, pink, white, grey, black) or [r, g, b] / [r, g, b, a] in [0, 1].
+# color    RViz body colour, default green. A name (green, red, blue, orange, purple)
+#          or [r, g, b] / [r, g, b, a] in [0, 1].
 #          Gazebo keeps the model.sdf colour.
 #
 # The first robot in the list is the one the web UI plots by default.

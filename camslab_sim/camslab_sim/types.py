@@ -43,9 +43,12 @@ class Params:
     k_perp: float = 4.0    # k_perp [1/m^2]
     k_q: float = 2.0       # k_q [1/s]
 
-    # Limits the reference must stay inside (check_limits in trajectory.py).
-    kappa_max: float = 2.9  # |kappa*| [1/m]; the Gazebo R2 turns at most tan(0.6) / 0.235
-    w_max: float = 2.0      # |w*| [rad/s]
+    # Limits. The reference must keep |kappa*| <= kappa_max and |w*| <= w_max
+    # (check_limits in trajectory.py), and every command is clamped to |v| <= v_max,
+    # |w| <= min(w_max, kappa_max |v|) (clamp in simulate.py).
+    kappa_max: float = 2.9  # [1/m]; the Gazebo R2 turns at most tan(0.6) / 0.235
+    w_max: float = 2.0      # [rad/s]
+    v_max: float = 0.6      # [m/s]
 
     def to_dict(self):
         return asdict(self)
