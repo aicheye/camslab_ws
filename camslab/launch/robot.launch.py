@@ -10,7 +10,7 @@ runs in namespace <name>:
                      /world/<world>/model/<name>/joint_state -> joint_states
   controller         pose -> cmd_vel, ref_pose, ref_path
   robot_state_publisher   r2.urdf.xacro (body colour `color`) + joint_states -> TF
-                          <name>/<link>, at most 60 Hz (Gazebo sends joint_states every
+                          <name>/<link>, at most 50 Hz (Gazebo sends joint_states every
                           1 ms physics step)
   pose_tf            pose -> TF map -> <name>/base_footprint
 
@@ -82,7 +82,7 @@ def generate_launch_description():
                                  LaunchConfiguration("start_enabled"), value_type=bool)}]),
             Node(package="robot_state_publisher", executable="robot_state_publisher",
                  parameters=[{"robot_description": robot_description,
-                              "frame_prefix": [name, "/"], "publish_frequency": 60.0}]),
+                              "frame_prefix": [name, "/"], "publish_frequency": 50.0}]),
             Node(package="camslab", executable="pose_tf",
                  parameters=[{"child_frame": [name, "/base_footprint"]}]),
         ]),

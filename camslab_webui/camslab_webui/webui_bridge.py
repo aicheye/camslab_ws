@@ -37,6 +37,9 @@ from .server import Backend, UiServer, fleet_msg, hello_msg, samples_msg, status
 PARAM_NAMES = ["shape", "x0", "y0", "theta0", "circle_speed", "kappa", "a", "period",
                "k_par", "k_perp", "k_q", "kappa_max", "w_max", "v_max", "path_time"]
 MAX_SAMPLES = 20000
+# Poses arrive every 10 ms, so a sample due at 40 ms can read as 39.99 ms after float
+# rounding. Accepting 5 ms early keeps 25 Hz from dropping to 20 Hz.
+SAMPLE_SLACK = 0.005
 RANDOM_TRIES = 50
 
 
@@ -73,7 +76,7 @@ class WebuiBridgeNode(Node, Backend):
             "others", rclpy.Parameter.Type.STRING_ARRAY).value or []
         host = self.declare_parameter("host", "0.0.0.0").value
         port = self.declare_parameter("port", 8000).value
-        sample_rate = self.declare_parameter("sample_rate", 30.0).value
+        sample_rate = self.declare_parameter("sample_rate", 25.0).value
         self.sample_period = 1.0 / sample_rate
 
         self.lock = threading.Lock()
@@ -131,7 +134,7 @@ class WebuiBridgeNode(Node, Backend):
     def on_pose(self, robot, msg):
         now = self.now()
         robot.last_pose = now
-        if now - robot.last_sample < self.sample_period:
+        if now - robot.last_sample < self.sample_period - SAMPLE_SLACK:
             return
         pose = planar(msg)
         if pose is None:

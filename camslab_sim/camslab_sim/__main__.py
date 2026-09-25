@@ -25,7 +25,7 @@ def main():
                     help="default: random, x and y in [0, RANGE], any heading")
     ap.add_argument("--random-range", type=float, default=4.0, metavar="RANGE")
     ap.add_argument("--seed", type=int, help="seed for the random initial pose")
-    ap.add_argument("--dt", type=float, default=0.01)
+    ap.add_argument("--dt", type=float, default=0.02)  # 50 Hz, the Gazebo controller rate
     ap.add_argument("--t-max", type=float, default=40.0)
     # One --<name> option per field of Params, e.g. --shape gerono --k-perp 4.
     for field in dataclasses.fields(Params):

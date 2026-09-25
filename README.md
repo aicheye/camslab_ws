@@ -120,7 +120,7 @@ Per robot, in namespace `<name>` (Gazebo model `<name>`):
 |---|---|---|
 | `controller` (C++) | `pose` | `cmd_vel`, `ref_pose` (PoseStamped), `ref_path` (Path, transient local) |
 | `parameter_bridge` | Gazebo pose, joint states; `cmd_vel` | `pose`, `joint_states`; Gazebo `cmd_vel` |
-| `robot_state_publisher` | `joint_states`, `urdf/r2.urdf.xacro` | TF `<name>/base_footprint -> <name>/*_link`, at most 60 Hz |
+| `robot_state_publisher` | `joint_states`, `urdf/r2.urdf.xacro` | TF `<name>/base_footprint -> <name>/*_link`, at most 50 Hz |
 | `pose_tf` (C++) | `pose` | TF `map -> <name>/base_footprint` |
 
 `controller` clamps each command to `|v| <= v_max` and
@@ -185,4 +185,4 @@ JSON over a WebSocket at `/ws`. Server code: `camslab_webui/camslab_webui/server
 publishes its first `ref_pose`.
 
 The offline sim sends one `samples` message per run (`mode: "batch"`) and accepts
-`set_initial`. The Gazebo fleet streams one row per robot at 30 Hz (`mode: "live"`).
+`set_initial`. The Gazebo fleet streams one row per robot at 25 Hz (`mode: "live"`).
