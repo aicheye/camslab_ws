@@ -20,8 +20,9 @@
   <material name="tyre"><color rgba="0.2 0.2 0.2 1"/></material>
   <material name="camera"><color rgba="0.08 0.08 0.08 1"/></material>
 
-  <!-- Frame names follow REP-120: base_footprint on the ground below base_link, the body
-       frame. The map -> base_footprint transform is the robot pose (pose_tf_node). -->
+  <!-- Frame names follow REP-120. base_footprint is on the ground at the middle of the rear
+       axle, the same point as the Gazebo model frame, and base_link is 0.11607 m ahead of
+       it. The map -> base_footprint transform is the robot pose (pose_tf_node). -->
   <link name="base_footprint"/>
 
   <link name="base_link">
@@ -47,7 +48,7 @@
   <joint name="base_joint" type="fixed">
     <parent link="base_footprint"/>
     <child link="base_link"/>
-    <origin xyz="0 0 ${base_z}"/>
+    <origin xyz="${-wheel_base_x} 0 ${base_z}"/>
   </joint>
 
   <xacro:macro name="wheel" params="name parent x y">

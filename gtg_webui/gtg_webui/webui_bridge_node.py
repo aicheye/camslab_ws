@@ -3,12 +3,15 @@
 Per robot <name>, subscribes /<name>/pose (geometry_msgs/PoseStamped),
 /<name>/cmd_vel (geometry_msgs/Twist), /<name>/reference (geometry_msgs/PoseStamped),
 and for the first robot /<name>/reference_path (nav_msgs/Path), drawn on the map.
-Calls:      /<name>/controller_node/enable, set_parameters, get_parameters
+Calls:      /<name>/controller_node/enable, set_parameters, set_parameters_atomically,
+            get_parameters
 
 `robot_name` is the robot in "samples", which the plots show by default. `others` lists
 the other robots, streamed as "fleet" messages. Start and Stop enable and disable every
 controller, and parameters set in the UI go to every controller, since all of them track
-the same trajectory.
+the same trajectory. The Random button sends random trajectory parameters inside the
+area (random_trajectory.py) to the first controller atomically, tries another set when the
+controller rejects one for its kappa_max or w_max, and copies the accepted set to the others.
 
 rclpy spins in a background thread. aiohttp runs in the main thread.
 """
@@ -21,18 +24,20 @@ import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Path
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
-from rcl_interfaces.srv import GetParameters, SetParameters
+from rcl_interfaces.srv import GetParameters, SetParameters, SetParametersAtomically
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
 from std_srvs.srv import SetBool
 
+from .random_trajectory import random_params
 from .server import Backend, UiServer, fleet_msg, hello_msg, samples_msg, status_msg
 
 # Controller parameters shown in the UI. shape is a string, the rest are doubles.
 PARAM_NAMES = ["shape", "x0", "y0", "theta0", "circle_speed", "kappa", "a", "period",
                "k_par", "k_perp", "k_q", "kappa_max", "w_max", "v_max", "path_time"]
 MAX_SAMPLES = 20000
+RANDOM_TRIES = 50
 
 
 def planar(msg):
@@ -103,6 +108,10 @@ class WebuiBridgeNode(Node, Backend):
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.set_params_clients = [
             self.create_client(SetParameters, f"/{name}/controller_node/set_parameters")
+            for name in self.robots]
+        self.atomic_clients = [
+            self.create_client(SetParametersAtomically,
+                               f"/{name}/controller_node/set_parameters_atomically")
             for name in self.robots]
         self.get_params_client = self.create_client(
             GetParameters, f"/{self.robot_name}/controller_node/get_parameters")
@@ -192,6 +201,8 @@ class WebuiBridgeNode(Node, Backend):
         kind = msg.get("type")
         if kind == "set_params":
             self.set_params({k: v for k, v in msg["params"].items() if k in PARAM_NAMES})
+        elif kind == "randomize_trajectory":
+            self.randomize()
         elif kind == "start":
             self.set_enabled(True)
         elif kind == "stop":
@@ -244,6 +255,48 @@ class WebuiBridgeNode(Node, Backend):
                 if main:
                     self.server.broadcast_threadsafe(self.config_msg())
             future.add_done_callback(done)
+
+    def randomize(self, tries_left=RANDOM_TRIES):
+        """Send random trajectory parameters to the first controller until it accepts a
+        set, then send that set to the other controllers."""
+        with self.lock:
+            params = dict(self.params)
+        needed = ("shape", "kappa_max", "w_max", "circle_speed")
+        if any(name not in params for name in needed):
+            self.report_error("controller parameters are not loaded yet")
+            return
+        try:
+            candidate = random_params(params["shape"], params)
+        except ValueError as exc:
+            self.report_error(str(exc))
+            return
+        request = SetParametersAtomically.Request(parameters=[
+            Parameter(name=name, value=ParameterValue(
+                type=ParameterType.PARAMETER_DOUBLE, double_value=value))
+            for name, value in candidate.items()])
+        main, others = self.atomic_clients[0], self.atomic_clients[1:]
+        if not main.service_is_ready():
+            self.report_error(f"{main.srv_name} is not available")
+            return
+
+        def done(f):
+            result = f.result().result
+            if not result.successful:
+                if tries_left > 1:
+                    self.randomize(tries_left - 1)
+                else:
+                    self.report_error(f"no random {params['shape']} accepted in "
+                                      f"{RANDOM_TRIES} tries: {result.reason}")
+                return
+            for client in others:
+                if client.service_is_ready():
+                    client.call_async(request)
+                else:
+                    self.report_error(f"{client.srv_name} is not available")
+            with self.lock:
+                self.params.update(candidate)
+            self.server.broadcast_threadsafe(self.config_msg())
+        main.call_async(request).add_done_callback(done)
 
     def report_error(self, message):
         self.get_logger().error(message)

@@ -7,8 +7,10 @@
   exports and are used for visuals only; collisions are primitives. Masses are
   estimates, because the URDF's SolidWorks masses (0.52 kg chassis) are too low.
 
-  Model frame = base_footprint: on the ground below the base_link origin, which is
-  0.11607 m ahead of the rear axle. The pose on the `pose` topic is this frame.
+  Model frame = base_footprint: on the ground at the middle of the rear axle, 0.11607 m
+  behind the base_link origin. The pose on the `pose` topic is this frame. The rear axle
+  midpoint is the point of an Ackermann car that moves as a unicycle, dp/dt = v q, which
+  is the plant the controller assumes.
 
     wheel_base       0.11922 + 0.11607 = 0.23529 m
     wheel_separation 2 * 0.08425       = 0.1685 m
@@ -24,7 +26,7 @@
   <model name="r2">
 
     <link name="base_link">
-      <pose>0 0 0.0215 0 0 0</pose>
+      <pose>0.11607 0 0.0215 0 0 0</pose>
       <inertial>
         <pose>0 0 0.06 0 0 0</pose>
         <mass>2.0</mass>
@@ -60,7 +62,7 @@
 
     <!-- Rear drive wheels. Joint axis +y, so positive joint velocity drives forward. -->
     <link name="rear_left_wheel">
-      <pose>-0.11607 0.08425 0.0345 0 0 0</pose>
+      <pose>0 0.08425 0.0345 0 0 0</pose>
       <inertial>
         <mass>0.06</mass>
         <inertia>
@@ -80,7 +82,7 @@
     </link>
 
     <link name="rear_right_wheel">
-      <pose>-0.11607 -0.08425 0.0345 0 0 0</pose>
+      <pose>0 -0.08425 0.0345 0 0 0</pose>
       <inertial>
         <mass>0.06</mass>
         <inertia>
@@ -113,7 +115,7 @@
 
     <!-- Front steering knuckles, pivot at the wheel centre. -->
     <link name="front_left_steer">
-      <pose>0.11922 0.08425 0.0345 0 0 0</pose>
+      <pose>0.23529 0.08425 0.0345 0 0 0</pose>
       <inertial>
         <mass>0.01</mass>
         <inertia>
@@ -124,7 +126,7 @@
     </link>
 
     <link name="front_right_steer">
-      <pose>0.11922 -0.08425 0.0345 0 0 0</pose>
+      <pose>0.23529 -0.08425 0.0345 0 0 0</pose>
       <inertial>
         <mass>0.01</mass>
         <inertia>
@@ -147,7 +149,7 @@
     </joint>
 
     <link name="front_left_wheel">
-      <pose>0.11922 0.08425 0.0345 0 0 0</pose>
+      <pose>0.23529 0.08425 0.0345 0 0 0</pose>
       <inertial>
         <mass>0.06</mass>
         <inertia>
@@ -167,7 +169,7 @@
     </link>
 
     <link name="front_right_wheel">
-      <pose>0.11922 -0.08425 0.0345 0 0 0</pose>
+      <pose>0.23529 -0.08425 0.0345 0 0 0</pose>
       <inertial>
         <mass>0.06</mass>
         <inertia>

@@ -1,7 +1,7 @@
 /* Reference trajectories p*(t). Same shapes as gtg_sim/trajectory.py.
 
-Each shape gives p*(t) and its first two time derivatives, differentiated by hand.
-reference() turns them into p*, q*, v*, w* and kappa*.
+Each shape gives p*(t) and its first two time derivatives, differentiated by
+hand. reference() turns them into p*, q*, v*, w* and kappa*.
 */
 
 #include "gtg_ros/trajectory.hpp"
@@ -13,19 +13,32 @@ reference() turns them into p*, q*, v*, w* and kappa*.
 namespace gtg_ros {
 
 Circle::Circle(const Params &params)
-    : p0_{params.x0, params.y0}, theta0_{params.theta0}, v_{params.circle_speed},
-      kappa_{params.kappa} {}
+    : p0_{params.x0, params.y0}, theta0_{params.theta0},
+      v_{params.circle_speed}, kappa_{params.kappa} {}
 
-Vec2 Circle::position(double /*t*/) const {
-  throw std::logic_error("Circle::position() in trajectory.cpp is not implemented");
+Vec2 Circle::heading(double t) const {
+  double a{std::cos(theta0_)};
+  double b{std::sin(theta0_)};
+  double c{std::cos(kappa_ * v_ * t)};
+  double d{std::sin(kappa_ * v_ * t)};
+  return {a * c - b * d, b * c + a * d};
 }
 
-Vec2 Circle::velocity(double /*t*/) const {
-  throw std::logic_error("Circle::velocity() in trajectory.cpp is not implemented");
+Vec2 Circle::position(double t) const {
+  if (std::abs(kappa_) < 1e-9)
+    return p0_ + velocity(t) * t;
+
+  Vec2 C{p0_.x - std::sin(theta0_) / kappa_,
+         p0_.y + std::cos(theta0_) / kappa_};
+  Mat2 S{0, 1, -1, 0};
+  return (1 / kappa_) * Mat2::dot(S, heading(t)) + C;
 }
 
-Vec2 Circle::acceleration(double /*t*/) const {
-  throw std::logic_error("Circle::acceleration() in trajectory.cpp is not implemented");
+Vec2 Circle::velocity(double t) const { return v_ * heading(t); }
+
+Vec2 Circle::acceleration(double t) const {
+  Mat2 R{0, -1, 1, 0};
+  return kappa_ * v_ * v_ * Mat2::dot(R, heading(t));
 }
 
 Gerono::Gerono(const Params &params)
@@ -33,20 +46,29 @@ Gerono::Gerono(const Params &params)
       period_{params.period} {}
 
 Vec2 Gerono::position(double /*t*/) const {
-  throw std::logic_error("Gerono::position() in trajectory.cpp is not implemented");
+  throw std::logic_error(
+      "Gerono::position() in trajectory.cpp is not implemented");
 }
 
 Vec2 Gerono::velocity(double /*t*/) const {
-  throw std::logic_error("Gerono::velocity() in trajectory.cpp is not implemented");
+  throw std::logic_error(
+      "Gerono::velocity() in trajectory.cpp is not implemented");
 }
 
 Vec2 Gerono::acceleration(double /*t*/) const {
-  throw std::logic_error("Gerono::acceleration() in trajectory.cpp is not implemented");
+  throw std::logic_error(
+      "Gerono::acceleration() in trajectory.cpp is not implemented");
 }
 
 // Return p*, q*, v*, w* and kappa* at time t.
-Reference reference(const Shape & /*shape*/, double /*t*/) {
-  throw std::logic_error("reference() in trajectory.cpp is not implemented");
+Reference reference(const Shape &shape, double t) {
+  double speed{shape.velocity(t).norm()};
+  Mat2 S{0, -1, 1, 0};
+  Vec2 heading{shape.velocity(t) / speed};
+  double angular{Vec2::dot(shape.acceleration(t), Mat2::dot(S, heading)) /
+                 speed};
+
+  return {shape.position(t), heading, speed, angular, angular / speed};
 }
 
 std::unique_ptr<Shape> makeShape(const Params &params) {
@@ -68,15 +90,17 @@ std::optional<std::string> checkLimits(const Shape &shape, const Params &params,
     const double t = t_end * i / kSamples;
     const Reference ref = reference(shape, t);
     if (std::abs(ref.kappa) > params.kappa_max) {
-      std::snprintf(message, sizeof(message),
-                    "|kappa*| = %.3f 1/m at t = %.2f s is above kappa_max = %.3f 1/m",
-                    std::abs(ref.kappa), t, params.kappa_max);
+      std::snprintf(
+          message, sizeof(message),
+          "|kappa*| = %.3f 1/m at t = %.2f s is above kappa_max = %.3f 1/m",
+          std::abs(ref.kappa), t, params.kappa_max);
       return std::string(message);
     }
     if (std::abs(ref.w) > params.w_max) {
-      std::snprintf(message, sizeof(message),
-                    "|w*| = %.3f rad/s at t = %.2f s is above w_max = %.3f rad/s",
-                    std::abs(ref.w), t, params.w_max);
+      std::snprintf(
+          message, sizeof(message),
+          "|w*| = %.3f rad/s at t = %.2f s is above w_max = %.3f rad/s",
+          std::abs(ref.w), t, params.w_max);
       return std::string(message);
     }
   }

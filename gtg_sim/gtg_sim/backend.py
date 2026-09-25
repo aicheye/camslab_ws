@@ -1,15 +1,19 @@
 """Web UI backend for the offline sim. "start" runs one simulation and sends the whole run."""
 
 import asyncio
+import dataclasses
 import logging
 
+from gtg_webui.random_trajectory import path_inside, random_params
 from gtg_webui.server import Backend, hello_msg, samples_msg, status_msg
 
 from .simulate import simulate
-from .trajectory import make_shape, sample_path
+from .trajectory import check_limits, make_shape, sample_path
 from .types import SHAPES, Params, State
 
 log = logging.getLogger("gtg_sim")
+
+RANDOM_TRIES = 200
 
 
 class SimBackend(Backend):
@@ -53,6 +57,10 @@ class SimBackend(Backend):
                     setattr(self, key, float(value))
                 elif hasattr(self.params, key):
                     setattr(self.params, key, float(value))
+        elif kind == "randomize_trajectory":
+            self._randomize()
+            await self.server.broadcast(samples_msg([], reset=True))
+            await self.server.broadcast(self.status)
         elif kind == "start":
             await self._run()
             return
@@ -65,6 +73,25 @@ class SimBackend(Backend):
         else:
             return
         await self.server.broadcast(self._config())
+
+    def _randomize(self):
+        """Replace the trajectory parameters with a random set for the current shape that
+        passes check_limits() over [0, t_max] and whose path stays inside the area."""
+        for _ in range(RANDOM_TRIES):
+            candidate = dataclasses.replace(
+                self.params, **random_params(self.params.shape, self.params.to_dict()))
+            shape = make_shape(candidate)
+            try:
+                check_limits(shape, candidate, self.t_max)
+            except ValueError:
+                continue
+            if path_inside(sample_path(shape, self.t_max)):
+                self.params = candidate
+                self.samples = []
+                self.status = status_msg("idle", "random trajectory set")
+                return
+        raise ValueError(f"no random {self.params.shape} within the limits and the area "
+                         f"in {RANDOM_TRIES} tries")
 
     async def _run(self):
         if self.dt <= 0 or self.t_max <= 0:

@@ -139,6 +139,12 @@ The map view is fixed with the origin at the bottom-left corner and 6 m along th
 shorter side. Wheel zooms, drag pans, Fit frames the current run and the reference path, and the view is kept
 in the browser's localStorage.
 
+The Random button next to the shape picks a random start pose and size for the selected
+shape (`gtg_webui/random_trajectory.py`) that stays 0.3 m inside the 0 to 6 m square and
+within `kappa_max` and `w_max`. The offline sim checks each candidate with
+`check_limits()` and the sampled path; in Gazebo, `controller_node` checks it, and the
+bridge sends it with `set_parameters_atomically` so a rejected set changes nothing.
+
 JSON over a WebSocket at `/ws`. Server code: `gtg_webui/gtg_webui/server.py`.
 
 | Direction | Message |
@@ -148,7 +154,7 @@ JSON over a WebSocket at `/ws`. Server code: `gtg_webui/gtg_webui/server.py`.
 | server -> UI | `{"type": "samples", "reset": bool, "samples": [[t, x, y, qx, qy, v, w, dist, xr, yr], ...]}` |
 | server -> UI | `{"type": "fleet", "reset": bool, "robots": {name: [[t, x, y, qx, qy, v, w, dist, xr, yr], ...]}}` (robots after the first) |
 | server -> UI | `{"type": "status", "state": "idle" \| "running" \| "error", "message"}` |
-| UI -> server | `set_initial {x, y, theta}`, `set_params {params}`, `start`, `stop`, `reset` |
+| UI -> server | `set_initial {x, y, theta}`, `set_params {params}`, `randomize_trajectory`, `start`, `stop`, `reset` |
 
 `dist` is `||p* - p||` and `(xr, yr)` is p*; `xr` and `yr` are `null` until a live robot
 publishes its first `reference`.

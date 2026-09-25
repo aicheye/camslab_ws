@@ -269,6 +269,10 @@ $('shape').addEventListener('change', (ev) => {
   send({ type: 'set_params', params: { shape: ev.target.value } });
 });
 
+// Random position, heading and size of the selected shape, inside the 0 to 6 m area and
+// within kappa_max and w_max. The backend picks and checks the values.
+$('traj-random').addEventListener('click', () => send({ type: 'randomize_trajectory' }));
+
 function syncInputs() {
   if (typeof state.params.shape === 'string') setValue($('shape'), state.params.shape);
   if (state.initial) {

@@ -60,8 +60,8 @@ class Circle:
                 self.p0[1] + math.cos(self.theta0) / self.kappa,
             ]
         )
-        R = np.array([[0, 1], [-1, 0]])
-        return (1 / self.kappa) * R @ self.heading(t) + C
+        S = np.array([[0, 1], [-1, 0]])
+        return (1 / self.kappa) * S @ self.heading(t) + C
 
     def velocity(self, t: float) -> np.ndarray:
         return self.v * self.heading(t)
@@ -105,8 +105,17 @@ def reference(shape, t: float) -> Reference:
     """Return p*, q*, v*, w* and kappa* at time t, from shape.position(t),
     shape.velocity(t) and shape.acceleration(t)."""
 
+    speed = np.linalg.norm(shape.velocity(t))
+    S = np.array([[0, -1], [1, 0]])
+    heading = shape.velocity(t) / speed
+    angular = shape.acceleration(t) @ (S @ heading) / speed
+
     ret: Reference = Reference(
-        shape.position(t), shape.heading(t), shape.v, shape.kappa * shape.v, shape.kappa
+        shape.position(t),
+        heading,
+        speed,
+        angular,
+        angular / speed,
     )
 
     return ret
