@@ -1,8 +1,8 @@
 """Web UI backend for the Gazebo robots. Streams ROS 2 topics to the browser.
 
 Per robot <name>, subscribes /<name>/pose (geometry_msgs/PoseStamped),
-/<name>/cmd_vel (geometry_msgs/Twist), /<name>/reference (geometry_msgs/PoseStamped),
-and for the first robot /<name>/reference_path (nav_msgs/Path), drawn on the map.
+/<name>/cmd_vel (geometry_msgs/Twist), /<name>/ref (geometry_msgs/PoseStamped),
+and for the first robot /<name>/ref_trajectory (nav_msgs/Path), drawn on the map.
 Calls:      /<name>/controller_node/enable, set_parameters, set_parameters_atomically,
             get_parameters
 
@@ -98,13 +98,13 @@ class WebuiBridgeNode(Node, Backend):
                 lambda msg, robot=robot: setattr(robot, "cmd", (msg.linear.x, msg.angular.z)),
                 10)
             self.create_subscription(
-                PoseStamped, f"/{name}/reference",
+                PoseStamped, f"/{name}/ref",
                 lambda msg, robot=robot: setattr(
                     robot, "ref", [msg.pose.position.x, msg.pose.position.y]), 10)
             self.enable_clients.append(
                 self.create_client(SetBool, f"/{name}/controller_node/enable"))
         self.create_subscription(
-            Path, f"/{self.robot_name}/reference_path", self.on_path,
+            Path, f"/{self.robot_name}/ref_trajectory", self.on_path,
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
         self.set_params_clients = [
             self.create_client(SetParameters, f"/{name}/controller_node/set_parameters")

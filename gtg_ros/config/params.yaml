@@ -11,7 +11,7 @@
     kappa: 1.0         # circle: curvature 1/r [1/m], 0 is a straight line
     a: 2.0             # gerono: half the length of the long axis [m]
     period: 40.0       # gerono: time for one lap [s]
-    path_time: 60.0    # reference_path and the limit check cover t in [0, path_time] [s]
+    path_time: 60.0    # ref_trajectory and the limit check cover t in [0, path_time] [s]
 
     # Control law gains, all > 0.
     k_par: 1.0         # [1/s]

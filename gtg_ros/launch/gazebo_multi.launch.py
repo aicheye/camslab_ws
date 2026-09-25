@@ -11,8 +11,8 @@ in config/params.yaml (shape, x0, y0, theta0, ...).
 This file starts the Gazebo world, the web UI, and RViz, and includes robot.launch.py
 once per robot with name:=<name>.
 
-RViz is the main view: it shows each robot, its reference_path, and its current
-reference p*. The controllers start enabled, so each robot drives as soon as it has a
+RViz is the main view: it shows each robot, its ref_trajectory, and its current
+ref p*. The controllers start enabled, so each robot drives as soon as it has a
 pose. /webui_bridge_node (root namespace, webui:=false to skip) plots the first robot in
 the fleet file and draws every robot; its Stop and Start disable and enable every
 controller, which also restarts the trajectory clock.
@@ -93,7 +93,7 @@ def rgba(robot):
 
 def rviz_config(share, fleet):
     """Path of an RViz config: rviz/fleet.rviz plus, per robot, a RobotModel display and
-    its reference_path and reference."""
+    its ref_trajectory and ref."""
     with open(os.path.join(share, "rviz", "fleet.rviz")) as f:
         config = yaml.safe_load(f)
     for robot in fleet:
@@ -113,9 +113,9 @@ def rviz_config(share, fleet):
         })
         config["Visualization Manager"]["Displays"].append({
             "Class": "rviz_default_plugins/Path",
-            "Name": f"{ns} reference_path",
+            "Name": f"{ns} ref_trajectory",
             "Enabled": True,
-            "Topic": {"Value": f"/{ns}/reference_path", "Depth": 1,
+            "Topic": {"Value": f"/{ns}/ref_trajectory", "Depth": 1,
                       "Durability Policy": "Transient Local", "History Policy": "Keep Last",
                       "Reliability Policy": "Reliable"},
             "Color": "235; 104; 52",
@@ -124,9 +124,9 @@ def rviz_config(share, fleet):
         })
         config["Visualization Manager"]["Displays"].append({
             "Class": "rviz_default_plugins/Pose",
-            "Name": f"{ns} reference",
+            "Name": f"{ns} ref",
             "Enabled": True,
-            "Topic": {"Value": f"/{ns}/reference", "Depth": 5,
+            "Topic": {"Value": f"/{ns}/ref", "Depth": 5,
                       "Durability Policy": "Volatile", "History Policy": "Keep Last",
                       "Reliability Policy": "Reliable"},
             "Shape": "Arrow",

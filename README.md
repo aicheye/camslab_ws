@@ -97,7 +97,7 @@ dependency to a `package.xml`.
 | `webui` | `true` | web UI on `port` (8000) |
 | `gui` | `false` | Gazebo window |
 
-RViz shows each robot, its `reference_path` (orange line) and its current `reference`
+RViz shows each robot, its `ref_trajectory` (orange line) and its current `ref`
 p* (orange arrow). The controllers start enabled (`start_enabled: true`), and each
 robot's trajectory clock starts at its first pose. Changing a trajectory parameter
 (`ros2 param set /angostura/controller_node shape gerono`) restarts the clock and
@@ -118,7 +118,7 @@ Per robot, in namespace `<name>` (Gazebo model `<name>`):
 
 | Node | Subscribes | Publishes |
 |---|---|---|
-| `controller_node` (C++) | `pose` | `cmd_vel`, `reference` (PoseStamped), `reference_path` (Path, transient local) |
+| `controller_node` (C++) | `pose` | `cmd_vel`, `ref` (PoseStamped), `ref_trajectory` (Path, transient local) |
 | `parameter_bridge` | Gazebo pose, joint states; `cmd_vel` | `pose`, `joint_states`; Gazebo `cmd_vel` |
 | `robot_state_publisher` | `joint_states`, `urdf/r2.urdf.xacro` | TF `<name>/base_footprint -> <name>/*_link`, at most 60 Hz |
 | `pose_tf_node` (C++) | `pose` | TF `map -> <name>/base_footprint` |

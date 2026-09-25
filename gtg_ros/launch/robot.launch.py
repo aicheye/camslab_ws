@@ -8,7 +8,7 @@ runs in namespace <name>:
   Gazebo model <name>, spawned into the world `gtg`
   parameter_bridge   /model/<name>/pose -> pose,  cmd_vel -> /model/<name>/cmd_vel,
                      /world/<world>/model/<name>/joint_state -> joint_states
-  controller_node    pose -> cmd_vel, reference, reference_path
+  controller_node    pose -> cmd_vel, ref, ref_trajectory
   robot_state_publisher   r2.urdf.xacro (body colour `color`) + joint_states -> TF
                           <name>/<link>, at most 60 Hz (Gazebo sends joint_states every
                           1 ms physics step)

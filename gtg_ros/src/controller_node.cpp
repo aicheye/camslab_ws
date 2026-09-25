@@ -3,8 +3,8 @@
 //
 // Subscribes: pose (geometry_msgs/PoseStamped)
 // Publishes:  cmd_vel (geometry_msgs/Twist),
-//             reference (geometry_msgs/PoseStamped): p* and q* now, while driving,
-//             reference_path (nav_msgs/Path, transient local): p*(t) for t in
+//             ref (geometry_msgs/PoseStamped): p* and q* now, while driving,
+//             ref_trajectory (nav_msgs/Path, transient local): p*(t) for t in
 //             [0, path_time], on startup and whenever a trajectory parameter changes.
 // Services:   ~/enable (std_srvs/SetBool). The node starts disabled unless start_enabled.
 //
@@ -64,9 +64,9 @@ public:
     const double rate = declare_parameter("rate", 50.0);
 
     cmd_pub_ = create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 10);
-    reference_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("reference", 10);
+    reference_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("ref", 10);
     path_pub_ = create_publisher<nav_msgs::msg::Path>(
-      "reference_path", rclcpp::QoS(1).transient_local());
+      "ref_trajectory", rclcpp::QoS(1).transient_local());
     // Sensor-data QoS (best effort) also connects to reliable publishers such as ros_gz_bridge.
     pose_sub_ = create_subscription<geometry_msgs::msg::PoseStamped>(
       "pose", rclcpp::SensorDataQoS(),
@@ -115,7 +115,7 @@ private:
     }
   }
 
-  // Adopts `params`, restarts the trajectory clock, and republishes reference_path.
+  // Adopts `params`, restarts the trajectory clock, and republishes ref_trajectory.
   void setTrajectory(const Params & params)
   {
     params_ = params;
@@ -144,7 +144,7 @@ private:
         path.poses.push_back(pose);
       }
     } catch (const std::logic_error & e) {
-      RCLCPP_ERROR(get_logger(), "no reference_path: %s", e.what());
+      RCLCPP_ERROR(get_logger(), "no ref_trajectory: %s", e.what());
       path.poses.clear();
     }
     path_pub_->publish(path);

@@ -1,6 +1,6 @@
 # Base RViz config for gazebo_multi.launch.py. The launch file adds, per robot in the fleet
 # file, a RobotModel display (topic /<name>/robot_description, TF prefix <name>) and the
-# /<name>/reference_path and /<name>/reference displays, and passes the result to rviz2.
+# /<name>/ref_trajectory and /<name>/ref displays, and passes the result to rviz2.
 # Fixed frame `map` (REP-105); the view looks along +y like the web UI.
 Panels:
   - Class: rviz_common/Displays
