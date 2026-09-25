@@ -1,4 +1,4 @@
 # The image only needs the package.xml files (docker/Dockerfile).
 *
-!gtg_ros/package.xml
-!gtg_webui/package.xml
+!camslab/package.xml
+!camslab_webui/package.xml

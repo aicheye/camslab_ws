@@ -1,0 +1,22 @@
+# ROS 2 C++ style: the ament_clang_format config, plus one argument per line when a call
+# does not fit, which matches ament_uncrustify.
+Language: Cpp
+BasedOnStyle: Google
+AccessModifierOffset: -2
+AlignAfterOpenBracket: AlwaysBreak
+BinPackArguments: false
+BinPackParameters: false
+BraceWrapping:
+  AfterClass: true
+  AfterEnum: true
+  AfterFunction: true
+  AfterNamespace: true
+  AfterStruct: true
+BreakBeforeBraces: Custom
+ColumnLimit: 100
+ConstructorInitializerIndentWidth: 0
+ContinuationIndentWidth: 2
+DerivePointerAlignment: false
+IncludeBlocks: Preserve
+PointerAlignment: Middle
+ReflowComments: Never

@@ -1,0 +1,86 @@
+<?xml version="1.0"?>
+<!--
+  Yahboom ROSMASTER R2 for robot_state_publisher and RViz.
+
+  Same geometry as models/r2/model.sdf, which Gazebo uses. Change both together.
+  robot_state_publisher's frame_prefix (rN/) makes the link names unique per robot.
+-->
+<robot name="r2" xmlns:xacro="http://www.ros.org/wiki/xacro">
+  <xacro:property name="mesh_dir" value="package://camslab/models/r2/meshes"/>
+  <xacro:property name="wheel_base_x" value="-0.11607"/>
+  <xacro:property name="front_axle_x" value="0.11922"/>
+  <xacro:property name="half_track" value="0.08425"/>
+  <xacro:property name="wheel_radius" value="0.0345"/>
+  <xacro:property name="base_z" value="0.0215"/>
+
+  <!-- Body colour "r g b a" in [0, 1]. robot.launch.py passes the fleet file's `color`. -->
+  <xacro:arg name="body_color" default="0 0.63 0.24 1"/>
+
+  <material name="body"><color rgba="$(arg body_color)"/></material>
+  <material name="tyre"><color rgba="0.2 0.2 0.2 1"/></material>
+  <material name="camera"><color rgba="0.08 0.08 0.08 1"/></material>
+
+  <!-- Frame names follow REP-120. base_footprint is on the ground at the middle of the rear
+       axle, the same point as the Gazebo model frame, and base_link is 0.11607 m ahead of
+       it. The map -> base_footprint transform is the robot pose (pose_tf). -->
+  <link name="base_footprint"/>
+
+  <link name="base_link">
+    <visual>
+      <geometry><mesh filename="${mesh_dir}/base_link.stl"/></geometry>
+      <material name="body"/>
+    </visual>
+  </link>
+
+  <link name="camera_link">
+    <visual>
+      <geometry><mesh filename="${mesh_dir}/camera_link.stl"/></geometry>
+      <material name="camera"/>
+    </visual>
+  </link>
+
+  <joint name="camera_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="camera_link"/>
+    <origin xyz="0.095117 0 0.09955" rpy="0 0.0057171 0"/>
+  </joint>
+
+  <joint name="base_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child link="base_link"/>
+    <origin xyz="${-wheel_base_x} 0 ${base_z}"/>
+  </joint>
+
+  <xacro:macro name="wheel" params="name parent x y">
+    <link name="${name}_link">
+      <visual>
+        <geometry><mesh filename="${mesh_dir}/back_right_link.stl"/></geometry>
+        <material name="tyre"/>
+      </visual>
+    </link>
+    <joint name="${name}_joint" type="continuous">
+      <parent link="${parent}"/>
+      <child link="${name}_link"/>
+      <origin xyz="${x} ${y} ${wheel_radius - base_z if parent == 'base_link' else 0}"/>
+      <axis xyz="0 1 0"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="steer" params="name y">
+    <link name="${name}_link"/>
+    <joint name="${name}_joint" type="revolute">
+      <parent link="base_link"/>
+      <child link="${name}_link"/>
+      <origin xyz="${front_axle_x} ${y} ${wheel_radius - base_z}"/>
+      <axis xyz="0 0 1"/>
+      <limit lower="-0.6" upper="0.6" effort="10" velocity="1"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:wheel name="rear_left_wheel" parent="base_link" x="${wheel_base_x}" y="${half_track}"/>
+  <xacro:wheel name="rear_right_wheel" parent="base_link" x="${wheel_base_x}" y="${-half_track}"/>
+  <xacro:steer name="front_left_steer" y="${half_track}"/>
+  <xacro:steer name="front_right_steer" y="${-half_track}"/>
+  <xacro:wheel name="front_left_wheel" parent="front_left_steer_link" x="0" y="0"/>
+  <xacro:wheel name="front_right_wheel" parent="front_right_steer_link" x="0" y="0"/>
+</robot>

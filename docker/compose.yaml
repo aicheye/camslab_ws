@@ -1,11 +1,11 @@
-# ROS 2 Humble shell with the repo mounted as /ws/src/camslab-gz.
+# ROS 2 Humble shell with the repo mounted as /ws/src/camslab_ws.
 #   docker compose -f docker/compose.yaml run --rm ros
 services:
   ros:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: gtg-ros:humble
+    image: camslab-ros:humble
     network_mode: host   # web UI on localhost:8000
     ipc: host
     environment:
@@ -18,7 +18,7 @@ services:
       - label=disable            # SELinux: allow the X11 socket without relabelling it
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:ro
-      - ..:/ws/src/camslab-gz:z
+      - ..:/ws/src/camslab_ws:z
       - ws_build:/ws/build
       - ws_install:/ws/install
       - ws_log:/ws/log

@@ -5,7 +5,7 @@ The plant is
     dp/dt = v q
     dq/dt = w S q,    S = [[0, -1], [1, 0]]
 
-`gtg_sim/simulate.py` samples the controller every `dt` and holds `v` and `w` constant
+`camslab_sim/simulate.py` samples the controller every `dt` and holds `v` and `w` constant
 until the next sample (zero-order hold). This is also what the real robot does: the
 ROS controller publishes `cmd_vel` at 50 Hz and the car holds each command. So
 `step(state, v, w, dt)` only has to solve the ODE over one interval with constant inputs.
@@ -38,7 +38,7 @@ of along a straight line in R^2. "Geometric integrator" is the search term.
 For a linear error equation `de/dt = -k e`, forward Euler is stable only for
 `dt < 2 / k` and accurate for `dt * k << 1`. Linearise the closed loop about the
 reference to find the rates that play the role of `k` for the tracking law. The same
-limit applies to the 50 Hz rate of `controller_node`.
+limit applies to the 50 Hz rate of `controller`.
 
 ## C++
 

@@ -3,8 +3,8 @@
 FROM ros:humble-ros-base
 
 # rosdep reads the package.xml files, the same way a bare-metal install does (README.md).
-COPY gtg_ros/package.xml /tmp/deps/gtg_ros/package.xml
-COPY gtg_webui/package.xml /tmp/deps/gtg_webui/package.xml
+COPY camslab/package.xml /tmp/deps/camslab/package.xml
+COPY camslab_webui/package.xml /tmp/deps/camslab_webui/package.xml
 RUN apt-get update \
     && rosdep update --rosdistro humble \
     && rosdep install --from-paths /tmp/deps --ignore-src -y \
