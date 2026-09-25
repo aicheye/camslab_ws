@@ -1,6 +1,7 @@
-# Base RViz config for gazebo_multi.launch.py. The launch file adds one RobotModel display
-# per robot in the fleet file (topic /<name>/robot_description, TF prefix <name>) and passes
-# the result to rviz2. Fixed frame `map` (REP-105); the view looks along +y like the web UI.
+# Base RViz config for gazebo_multi.launch.py. The launch file adds, per robot in the fleet
+# file, a RobotModel display (topic /<name>/robot_description, TF prefix <name>) and the
+# /<name>/reference_path and /<name>/reference displays, and passes the result to rviz2.
+# Fixed frame `map` (REP-105); the view looks along +y like the web UI.
 Panels:
   - Class: rviz_common/Displays
     Name: Displays
@@ -25,22 +26,6 @@ Visualization Manager:
       Show Names: true
       Marker Scale: 0.4
       Value: true
-    - Class: rviz_default_plugins/Pose
-      Name: goal
-      Enabled: true
-      Topic:
-        Value: /goal
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
-      Shape: Arrow
-      Color: 235; 104; 52
-      Shaft Length: 0.25
-      Shaft Radius: 0.02
-      Head Length: 0.08
-      Head Radius: 0.05
-      Value: true
   Global Options:
     Fixed Frame: map
     Background Color: 48; 48; 48
@@ -50,14 +35,6 @@ Visualization Manager:
     - Class: rviz_default_plugins/MoveCamera
     - Class: rviz_default_plugins/Select
     - Class: rviz_default_plugins/Measure
-    # 2D Goal Pose (G) publishes the leader's goal directly; the heading is ignored.
-    - Class: rviz_default_plugins/SetGoal
-      Topic:
-        Value: /goal
-        Depth: 5
-        Durability Policy: Volatile
-        History Policy: Keep Last
-        Reliability Policy: Reliable
   Views:
     Current:
       Class: rviz_default_plugins/Orbit

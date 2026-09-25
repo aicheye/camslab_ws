@@ -13,8 +13,8 @@ from aiohttp import WSMsgType, web
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-# Column order of each row in a "samples" message.
-SAMPLE_FIELDS = ["t", "x", "y", "qx", "qy", "v", "w", "dist"]
+# Column order of each row in a "samples" message. dist = ||p* - p||, (xr, yr) = p*.
+SAMPLE_FIELDS = ["t", "x", "y", "qx", "qy", "v", "w", "dist", "xr", "yr"]
 
 log = logging.getLogger("gtg_webui")
 
@@ -45,7 +45,7 @@ def hello_msg(backend, mode, can_set_pose, robot_name=""):
 
 
 def status_msg(state, message=""):
-    """state is one of "idle", "running", "reached", "error"."""
+    """state is one of "idle", "running", "error"."""
     return {"type": "status", "state": state, "message": message}
 
 
@@ -53,10 +53,10 @@ def samples_msg(samples, reset=False):
     return {"type": "samples", "reset": reset, "samples": samples}
 
 
-def fleet_msg(robots, goals=None, reset=False):
+def fleet_msg(robots, reset=False):
     """Robots other than the one in "samples". robots is {name: [row, ...]} with rows in
-    SAMPLE_FIELDS order, goals is {name: [x, y]} with each robot's latest tracked goal."""
-    return {"type": "fleet", "reset": reset, "robots": robots, "goals": goals or {}}
+    SAMPLE_FIELDS order."""
+    return {"type": "fleet", "reset": reset, "robots": robots}
 
 
 @web.middleware

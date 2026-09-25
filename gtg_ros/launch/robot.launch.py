@@ -1,6 +1,6 @@
 """One Yahboom R2 in a running Gazebo world, in namespace <name>.
 
-    ros2 launch gtg_ros robot.launch.py name:=badger x:=1.9 y:=1.0 goal_topic:=/axolotl/follow_goal
+    ros2 launch gtg_ros robot.launch.py name:=badger x:=1.9 y:=1.0
 
 gazebo_multi.launch.py includes this once per robot in the fleet file. Everything below
 runs in namespace <name>:
@@ -8,7 +8,7 @@ runs in namespace <name>:
   Gazebo model <name>, spawned into the world `gtg`
   parameter_bridge   /model/<name>/pose -> pose,  cmd_vel -> /model/<name>/cmd_vel,
                      /world/<world>/model/<name>/joint_state -> gazebo/joint_states
-  controller_node    pose, goal (remapped to goal_topic) -> cmd_vel, follow_goal
+  controller_node    pose -> cmd_vel, reference, reference_path
   joint_state_publisher   republishes gazebo/joint_states on joint_states, stamped
                           with wall time (Gazebo stamps with simulation time)
   robot_state_publisher   r2.urdf.xacro (body colour `color`) + joint_states -> TF <name>/<link>
@@ -38,15 +38,13 @@ def generate_launch_description():
         DeclareLaunchArgument("x", default_value="0.0", description="spawn x [m]"),
         DeclareLaunchArgument("y", default_value="0.0", description="spawn y [m]"),
         DeclareLaunchArgument("yaw", default_value="0.0", description="spawn heading [rad]"),
-        DeclareLaunchArgument("goal_topic", default_value="/goal",
-                              description="topic the controller drives to"),
         DeclareLaunchArgument("params", default_value=os.path.join(share, "config", "params.yaml"),
                               description="controller parameter file"),
         DeclareLaunchArgument("color", default_value="0 0.63 0.24 1",
                               description="RViz body colour \"r g b a\" in [0, 1]"),
         DeclareLaunchArgument("world", default_value="gtg", description="Gazebo world name"),
         DeclareLaunchArgument("start_enabled", default_value="true",
-                              description="controller drives as soon as it has a goal"),
+                              description="controller drives as soon as it has a pose"),
 
         GroupAction([
             PushRosNamespace(name),
@@ -70,8 +68,7 @@ def generate_launch_description():
             Node(package="gtg_ros", executable="controller_node", output="screen",
                  parameters=[LaunchConfiguration("params"),
                              {"start_enabled": ParameterValue(
-                                 LaunchConfiguration("start_enabled"), value_type=bool)}],
-                 remappings=[("goal", LaunchConfiguration("goal_topic"))]),
+                                 LaunchConfiguration("start_enabled"), value_type=bool)}]),
             Node(package="robot_state_publisher", executable="robot_state_publisher",
                  parameters=[{"robot_description": robot_description,
                               "frame_prefix": [name, "/"]}]),

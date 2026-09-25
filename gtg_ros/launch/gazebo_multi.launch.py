@@ -1,21 +1,19 @@
-"""Leader-follower Yahboom R2s in Gazebo Fortress + web UI.
+"""Yahboom R2s tracking a reference trajectory in Gazebo Fortress, with RViz and the web UI.
 
     ros2 launch gtg_ros gazebo_multi.launch.py                       # config/fleet.yaml
     ros2 launch gtg_ros gazebo_multi.launch.py fleet:=/path/to/other.yaml
 
-The fleet file lists the robots. The one without `follows` is the leader and drives to
-/goal, set in the web UI. Every other robot drives to the follow_goal of the robot named
-in its `follows`.
+The fleet file lists the robots. Every robot's controller_node tracks the trajectory set
+in config/params.yaml (shape, x0, y0, theta0, ...).
 
 This file starts the Gazebo world, the web UI, and RViz, and includes robot.launch.py
-once per robot with name:=<name> and goal_topic:=
-  leader:    /goal
-  followers: /<follows>/follow_goal
+once per robot with name:=<name>.
 
-RViz is the main view: its 2D Goal Pose tool (G) publishes /goal. The controllers start
-enabled, so the fleet drives as soon as a goal arrives. /webui_bridge_node (root
-namespace, webui:=false to skip) draws every robot and plots; its Stop and Start disable
-and enable every controller.
+RViz is the main view: it shows each robot, its reference_path, and its current
+reference p*. The controllers start enabled, so each robot drives as soon as it has a
+pose. /webui_bridge_node (root namespace, webui:=false to skip) plots the first robot in
+the fleet file and draws every robot; its Stop and Start disable and enable every
+controller, which also restarts the trajectory clock.
 Spawn poses come from the fleet file; the web UI's Reset stops the controllers and clears
 the plots.
 """
@@ -62,12 +60,9 @@ def load_fleet(path):
             raise RuntimeError(f"{path}: robot name {name!r} must match [a-z][a-z0-9_]*")
     if len(set(names)) != len(names):
         raise RuntimeError(f"{path}: duplicate robot names {names}")
-    leaders = [r["name"] for r in fleet if "follows" not in r]
-    if len(leaders) != 1:
-        raise RuntimeError(f"{path}: need exactly one robot without `follows`, got {leaders}")
+    if not names:
+        raise RuntimeError(f"{path}: `robots` is empty")
     for r in fleet:
-        if "follows" in r and r["follows"] not in names:
-            raise RuntimeError(f"{path}: {r['name']} follows unknown robot {r['follows']}")
         color = r.get("color", DEFAULT_COLOR)
         if isinstance(color, str):
             if color not in COLORS:
@@ -88,7 +83,8 @@ def rgba(robot):
 
 
 def rviz_config(share, fleet):
-    """Path of an RViz config: rviz/fleet.rviz plus one RobotModel display per robot."""
+    """Path of an RViz config: rviz/fleet.rviz plus, per robot, a RobotModel display and
+    its reference_path and reference."""
     with open(os.path.join(share, "rviz", "fleet.rviz")) as f:
         config = yaml.safe_load(f)
     for robot in fleet:
@@ -104,6 +100,32 @@ def rviz_config(share, fleet):
                                   "Reliability Policy": "Reliable"},
             "TF Prefix": ns,
             "Visual Enabled": True,
+            "Value": True,
+        })
+        config["Visualization Manager"]["Displays"].append({
+            "Class": "rviz_default_plugins/Path",
+            "Name": f"{ns} reference_path",
+            "Enabled": True,
+            "Topic": {"Value": f"/{ns}/reference_path", "Depth": 1,
+                      "Durability Policy": "Transient Local", "History Policy": "Keep Last",
+                      "Reliability Policy": "Reliable"},
+            "Color": "235; 104; 52",
+            "Line Style": "Lines",
+            "Value": True,
+        })
+        config["Visualization Manager"]["Displays"].append({
+            "Class": "rviz_default_plugins/Pose",
+            "Name": f"{ns} reference",
+            "Enabled": True,
+            "Topic": {"Value": f"/{ns}/reference", "Depth": 5,
+                      "Durability Policy": "Volatile", "History Policy": "Keep Last",
+                      "Reliability Policy": "Reliable"},
+            "Shape": "Arrow",
+            "Color": "235; 104; 52",
+            "Shaft Length": 0.25,
+            "Shaft Radius": 0.02,
+            "Head Length": 0.08,
+            "Head Radius": 0.05,
             "Value": True,
         })
     out = tempfile.NamedTemporaryFile("w", prefix="gtg_fleet_", suffix=".rviz", delete=False)
@@ -129,32 +151,27 @@ def robots(context):
 
     robot_launch = os.path.join(share, "launch", "robot.launch.py")
     for robot in fleet:
-        goal = f"/{robot['follows']}/follow_goal" if "follows" in robot else "/goal"
         actions.append(IncludeLaunchDescription(
             PythonLaunchDescriptionSource(robot_launch),
             launch_arguments={"name": robot["name"], "x": str(robot["x"]),
                               "y": str(robot["y"]), "yaw": str(robot.get("yaw", 0.0)),
-                              "goal_topic": goal, "color": rgba(robot)}.items()))
+                              "color": rgba(robot)}.items()))
 
     if LaunchConfiguration("rviz").perform(context).lower() == "true":
         actions.append(Node(package="rviz2", executable="rviz2", output="log",
                             arguments=["-d", rviz_config(share, fleet)]))
 
-    leader = next(r["name"] for r in fleet if "follows" not in r)
-    followers = [r for r in fleet if "follows" in r]
     if LaunchConfiguration("webui").perform(context).lower() != "true":
         return actions
-    bridge_params = {"backend_label": f"Gazebo fleet of {len(fleet)}, leader {leader}",
-                     "port": port, "start_enabled": True,
-                     "controller_node": f"/{leader}/controller_node", "robot_name": leader}
-    if followers:
-        bridge_params["followers"] = [r["name"] for r in followers]
-        bridge_params["follows"] = [r["follows"] for r in followers]
-    # Root namespace: publishes /goal, and watches the leader through these remappings.
+    first, others = fleet[0]["name"], [r["name"] for r in fleet[1:]]
+    label = f"Gazebo, {first}" if not others else f"Gazebo fleet of {len(fleet)}"
+    bridge_params = {"backend_label": label, "port": port, "start_enabled": True,
+                     "robot_name": first}
+    if others:
+        bridge_params["others"] = others
+    # Root namespace. Plots the first robot and streams the others as "fleet" messages.
     actions.append(Node(package="gtg_webui", executable="webui_bridge_node", output="screen",
-                        parameters=[bridge_params],
-                        remappings=[("pose", f"/{leader}/pose"),
-                                    ("cmd_vel", f"/{leader}/cmd_vel")]))
+                        parameters=[bridge_params]))
     return actions
 
 
@@ -168,7 +185,7 @@ def generate_launch_description():
         DeclareLaunchArgument("port", default_value="8000", description="web UI port"),
         DeclareLaunchArgument("rviz", default_value="true", description="start RViz"),
         DeclareLaunchArgument("webui", default_value="true",
-                              description="start the web UI (optional; RViz sets goals too)"),
+                              description="start the web UI (optional)"),
         SetEnvironmentVariable("IGN_GAZEBO_RESOURCE_PATH", os.path.join(share, "models")),
         OpaqueFunction(function=robots),
     ])

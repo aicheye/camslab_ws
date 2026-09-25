@@ -1,33 +1,27 @@
-"""Go-to-goal control law.
+"""Trajectory tracking control law.
 
-With a = p* - p:
+With the reference p*, q*, v*, w* from trajectory.reference() and e = p* - p:
 
-    v = v*              if ||a|| > D
-        Kv ||a||        otherwise
-    w = Kw atan2(sin(e), cos(e))
-    e = (bearing of a) - (heading of q)
+    v = < v* q* + k_par e, q >
+    w = w* + < k_perp v* e + k_q q*, S q >
+
+<a, b> is the dot product a . b, and S = [[0, -1], [1, 0]] rotates a vector by +90 deg,
+the same S as in plant.py. k_par, k_perp, k_q > 0.
 """
-
-import math
 
 import numpy as np
 
+from .trajectory import Reference
 from .types import Params, State
 
 
-def control(state: State, goal: np.ndarray, params: Params):
-    """Return the command (v [m/s], w [rad/s]) for the goal p* = goal."""
+def control(state: State, ref: Reference, params: Params):
+    """Return the command (v [m/s], w [rad/s]) that tracks ref."""
 
-    a = goal - state.p
-    d = np.linalg.norm(a)
+    e = ref.p - state.p
+    S = np.array([[0, -1], [1, 0]])
 
-    v: float
-    if d > params.d_switch:
-        v = params.v_star
-    else:
-        v = params.k_v * d
-
-    e = math.atan2(a[1], a[0]) - math.atan2(state.q[1], state.q[0])
-    w = params.k_w * math.atan2(math.sin(e), math.cos(e))
+    v = (ref.v * ref.q + params.k_par * e) @ state.q
+    w = ref.w + (params.k_perp * ref.v * e + params.k_q * ref.q) @ (S @ state.q)
 
     return (v, w)

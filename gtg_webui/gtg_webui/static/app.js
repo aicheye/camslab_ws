@@ -1,22 +1,31 @@
 'use strict';
 
 // Column order of a sample row. Matches SAMPLE_FIELDS in server.py.
-const T = 0, X = 1, Y = 2, QX = 3, QY = 4, V = 5, W = 6, DIST = 7;
-const FIELDS = ['t', 'x', 'y', 'qx', 'qy', 'v', 'w', 'dist'];
+// DIST is ||p* - p||, (XR, YR) is p*. XR and YR are null before a live robot has a reference.
+const T = 0, X = 1, Y = 2, QX = 3, QY = 4, V = 5, W = 6, DIST = 7, XR = 8, YR = 9;
+const FIELDS = ['t', 'x', 'y', 'qx', 'qy', 'v', 'w', 'dist', 'xr', 'yr'];
 const MAX_LIVE_SAMPLES = 20000;
 
 // Robot footprint drawn on the map, in metres.
 const ROBOT_LENGTH = 0.30;
 const ROBOT_WIDTH = 0.18;
 
+// Parameters shown, in this order; others follow. shape has its own select.
 const PARAM_LABELS = {
-  v_star: 'v* [m/s]',
-  d_switch: 'D [m]',
-  k_v: 'Kv [1/s]',
-  k_w: 'Kω [1/s]',
-  epsilon: 'ε [m]',
+  x0: 'x0 [m]',
+  y0: 'y0 [m]',
+  theta0: 'θ0 [rad]',
+  circle_speed: 'circle speed [m/s]',
+  kappa: 'circle κ [1/m]',
+  a: 'gerono a [m]',
+  period: 'gerono period [s]',
+  k_par: 'k∥ [1/s]',
+  k_perp: 'k⊥ [1/m²]',
+  k_q: 'k_q [1/s]',
+  kappa_max: 'κ max [1/m]',
+  w_max: 'ω* max [rad/s]',
   v_max: 'v max [m/s]',
-  w_max: 'ω max [rad/s]',
+  path_time: 'path time [s]',
   dt: 'dt [s]',
   t_max: 't max [s]',
 };
@@ -34,9 +43,8 @@ const state = {
   playT: 0,
   lastFrame: 0,
   fleet: {},      // other robots: {name: [row, ...]}, rows as in samples, latest last
-  fleetGoals: {}, // {name: [x, y]}, goal each other robot tracks
   selected: '',   // robot shown in plots and readout: '' is the one in samples
-  goal: null,     // [x, y]
+  path: [],       // [[x, y], ...], p*(t) sampled over the run
   initial: null,  // {x, y, theta}
   params: {},
 };
@@ -44,7 +52,7 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const world = $('world');
 const plots = [
-  { canvas: $('plot-dist'), col: DIST, refs: () => refLines() },
+  { canvas: $('plot-dist'), col: DIST, refs: () => [] },
   { canvas: $('plot-v'), col: V, refs: () => [] },
   { canvas: $('plot-w'), col: W, refs: () => [] },
 ];
@@ -121,19 +129,18 @@ function onMessage(msg) {
     $('initial-set').hidden = !msg.can_set_pose;
   } else if (msg.type === 'config') {
     if (msg.params) Object.assign(state.params, msg.params);
-    if (msg.goal) state.goal = msg.goal;
+    if (msg.path) state.path = msg.path;
     if (msg.initial) state.initial = msg.initial;
     syncInputs();
   } else if (msg.type === 'samples') {
     onSamples(msg);
   } else if (msg.type === 'fleet') {
-    if (msg.reset) { state.fleet = {}; state.fleetGoals = {}; }
+    if (msg.reset) state.fleet = {};
     for (const [name, rows] of Object.entries(msg.robots)) {
       const trail = state.fleet[name] || (state.fleet[name] = []);
       for (const row of rows) trail.push(row);
       if (trail.length > MAX_LIVE_SAMPLES) trail.splice(0, trail.length - MAX_LIVE_SAMPLES);
     }
-    Object.assign(state.fleetGoals, msg.goals || {});
     syncRobotPicker();
   } else if (msg.type === 'status') {
     $('status').dataset.state = msg.state;
@@ -226,16 +233,6 @@ function numberOf(id) {
   return Number.isFinite(v) ? v : null;
 }
 
-function sendGoal() {
-  const x = numberOf('goal-x'), y = numberOf('goal-y');
-  if (x === null || y === null) return;
-  state.goal = [x, y];
-  send({ type: 'set_goal', x, y });
-  dirty = true;
-}
-$('goal-x').addEventListener('change', sendGoal);
-$('goal-y').addEventListener('change', sendGoal);
-
 function sendInitial() {
   const x = numberOf('init-x'), y = numberOf('init-y'), deg = numberOf('init-th');
   if (x === null || y === null || deg === null) return;
@@ -267,18 +264,25 @@ function setValue(input, value) {
   if (document.activeElement !== input) input.value = value;
 }
 
+$('shape').addEventListener('change', (ev) => {
+  state.params.shape = ev.target.value;
+  send({ type: 'set_params', params: { shape: ev.target.value } });
+});
+
 function syncInputs() {
-  if (state.goal) {
-    setValue($('goal-x'), state.goal[0]);
-    setValue($('goal-y'), state.goal[1]);
-  }
+  if (typeof state.params.shape === 'string') setValue($('shape'), state.params.shape);
   if (state.initial) {
     setValue($('init-x'), state.initial.x);
     setValue($('init-y'), state.initial.y);
     setValue($('init-th'), +((state.initial.theta * 180) / Math.PI).toFixed(3));
   }
   const box = $('params');
-  for (const [key, value] of Object.entries(state.params)) {
+  const keys = Object.keys(state.params).filter((k) => typeof state.params[k] === 'number');
+  const order = Object.keys(PARAM_LABELS);
+  const rank = (k) => (order.includes(k) ? order.indexOf(k) : order.length);
+  keys.sort((a, b) => rank(a) - rank(b));
+  for (const key of keys) {
+    const value = state.params[key];
     let input = box.querySelector(`input[data-key="${key}"]`);
     if (!input) {
       const label = document.createElement('label');
@@ -307,7 +311,7 @@ $('csv').addEventListener('click', () => {
   const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/csv' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `go-to-goal-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
+  a.download = `tracking-${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
 });
@@ -386,11 +390,7 @@ function fitCamera() {
   };
   for (const s of state.samples) include(s[X], s[Y]);
   for (const trail of Object.values(state.fleet)) for (const s of trail) include(s[X], s[Y]);
-  if (state.goal) {
-    const r = Math.max(state.params.d_switch || 0, 0);
-    include(state.goal[0] - r, state.goal[1] - r);
-    include(state.goal[0] + r, state.goal[1] + r);
-  }
+  for (const [x, y] of state.path) include(x, y);
   if (state.initial) include(state.initial.x, state.initial.y);
   camera.cx = (x0 + x1) / 2;
   camera.cy = (y0 + y1) / 2;
@@ -456,36 +456,25 @@ function drawGrid(ctx, w, h) {
   ctx.fillText('y_g', ox + 4, oy - len - 4);
 }
 
-function drawGoalRegions(ctx) {
-  if (!state.goal) return;
-  const gx = view.sx(state.goal[0]), gy = view.sy(state.goal[1]);
-  const orange = colors['series-2'];
-  ctx.strokeStyle = orange;
-  ctx.fillStyle = orange;
+// Reference path p*(t), dashed.
+function drawPath(ctx) {
+  if (state.path.length < 2) return;
+  ctx.strokeStyle = colors['series-2'];
   ctx.lineWidth = 1.5;
-  const eps = state.params.epsilon, dSwitch = state.params.d_switch;
-  ctx.font = '11px system-ui, sans-serif';
-  ctx.textAlign = 'center';
-  if (eps > 0) {
-    ctx.beginPath();
-    ctx.arc(gx, gy, eps * view.scale, 0, 2 * Math.PI);
-    ctx.globalAlpha = 0.18; ctx.fill(); ctx.globalAlpha = 1;
-    ctx.stroke();
-  }
-  if (dSwitch > 0) {
-    ctx.setLineDash([5, 4]);
-    ctx.beginPath();
-    ctx.arc(gx, gy, dSwitch * view.scale, 0, 2 * Math.PI);
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.fillStyle = colors['text-secondary'];
-    ctx.fillText('D', gx, gy - dSwitch * view.scale - 4);
-  }
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath();
+  state.path.forEach(([x, y], i) => {
+    if (i === 0) ctx.moveTo(view.sx(x), view.sy(y));
+    else ctx.lineTo(view.sx(x), view.sy(y));
+  });
+  ctx.stroke();
+  ctx.setLineDash([]);
 }
 
-function drawGoalMarker(ctx) {
-  if (!state.goal) return;
-  const gx = view.sx(state.goal[0]), gy = view.sy(state.goal[1]);
+// Cross at the reference p* of a sample row, labelled p* or p*<name>.
+function drawReference(ctx, row, color, label) {
+  if (!row || row[XR] === null || row[XR] === undefined) return;
+  const gx = view.sx(row[XR]), gy = view.sy(row[YR]);
   ctx.strokeStyle = colors.surface;
   ctx.lineWidth = 5;
   for (const pass of [0, 1]) {
@@ -493,13 +482,13 @@ function drawGoalMarker(ctx) {
     ctx.moveTo(gx - 5, gy - 5); ctx.lineTo(gx + 5, gy + 5);
     ctx.moveTo(gx - 5, gy + 5); ctx.lineTo(gx + 5, gy - 5);
     ctx.stroke();
-    ctx.strokeStyle = colors['series-2'];
+    ctx.strokeStyle = color;
     ctx.lineWidth = 2;
   }
   ctx.font = '11px system-ui, sans-serif';
   ctx.fillStyle = colors['text-secondary'];
   ctx.textAlign = 'left';
-  ctx.fillText('p*', gx + 8, gy - 8);
+  ctx.fillText(label, gx + 8, gy - 8);
 }
 
 function drawTrail(ctx, from, to, alpha, rows = state.samples, color = colors['series-1']) {
@@ -553,7 +542,7 @@ function drawRobot(ctx, x, y, qx, qy, ghost, color = colors['series-1'], label =
   }
 }
 
-// Other robots: trail, latest pose, and the goal each one tracks, in its own colour.
+// Other robots: trail, latest pose, and reference p*, in its own colour.
 function drawFleet(ctx) {
   for (const name of Object.keys(state.fleet).sort()) {
     const trail = state.fleet[name];
@@ -562,27 +551,7 @@ function drawFleet(ctx) {
     drawTrail(ctx, 0, trail.length - 1, 0.6, trail, color);
     const s = trail[trail.length - 1];
     drawRobot(ctx, s[X], s[Y], s[QX], s[QY], false, color, name);
-  }
-}
-
-function drawFleetGoals(ctx) {
-  ctx.font = '11px system-ui, sans-serif';
-  ctx.textAlign = 'left';
-  for (const [name, goal] of Object.entries(state.fleetGoals)) {
-    const gx = view.sx(goal[0]), gy = view.sy(goal[1]);
-    const color = robotColor(name);
-    ctx.strokeStyle = colors.surface;
-    ctx.lineWidth = 4;
-    for (const pass of [0, 1]) {
-      ctx.beginPath();
-      ctx.moveTo(gx - 4, gy - 4); ctx.lineTo(gx + 4, gy + 4);
-      ctx.moveTo(gx - 4, gy + 4); ctx.lineTo(gx + 4, gy - 4);
-      ctx.stroke();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 2;
-    }
-    ctx.fillStyle = color;
-    ctx.fillText(`p*${name}`, gx + 6, gy + 12);
+    drawReference(ctx, s, color, `p*${name}`);
   }
 }
 
@@ -590,7 +559,7 @@ function drawWorld() {
   const { ctx, w, h } = fitCanvas(world);
   view = computeView(w, h);
   drawGrid(ctx, w, h);
-  drawGoalRegions(ctx);
+  drawPath(ctx);
   const n = state.samples.length;
   if (state.initial && state.canSetPose) {
     const th = state.initial.theta;
@@ -612,11 +581,10 @@ function drawWorld() {
     ctx.arc(view.sx(s[X]), view.sy(s[Y]), 6, 0, 2 * Math.PI);
     ctx.stroke();
   }
-  drawFleetGoals(ctx);
-  drawGoalMarker(ctx);
+  if (n > 0 && state.cursor >= 0) drawReference(ctx, state.samples[state.cursor], colors['series-2'], 'p*');
 }
 
-// A press that moves less than 4 px sets the goal. A longer drag pans the view.
+// A drag longer than 4 px pans the view.
 let drag = null;
 
 world.addEventListener('pointerdown', (ev) => {
@@ -627,14 +595,8 @@ world.addEventListener('pointerdown', (ev) => {
 
 world.addEventListener('pointerup', (ev) => {
   if (!drag) return;
-  const wasPanning = drag.panning;
   drag = null;
   world.style.cursor = '';
-  if (wasPanning) return;
-  const rect = world.getBoundingClientRect();
-  $('goal-x').value = +view.wx(ev.clientX - rect.left).toFixed(3);
-  $('goal-y').value = +view.wy(ev.clientY - rect.top).toFixed(3);
-  sendGoal();
 });
 world.addEventListener('pointercancel', () => { drag = null; world.style.cursor = ''; });
 
@@ -689,13 +651,6 @@ world.addEventListener('pointerleave', () => setHover(-1));
 // --------------------------------------------------------------------- plots
 
 const PLOT_MARGIN = { left: 46, right: 12, top: 8, bottom: 18 };
-
-function refLines() {
-  const lines = [];
-  if (state.params.d_switch > 0) lines.push({ value: state.params.d_switch, label: 'D' });
-  if (state.params.epsilon > 0) lines.push({ value: state.params.epsilon, label: 'ε' });
-  return lines;
-}
 
 function timeRange() {
   const s = selRows();

@@ -19,9 +19,8 @@ ROS controller publishes `cmd_vel` at 50 Hz and the car holds each command. So
    Fourth-order accurate. `||q||` still drifts, but by about 1e-11 over the test.
 3. **`scipy.integrate.solve_ivp`.** Call it over `[0, dt]` inside `step`, or drop the
    fixed-step loop and integrate the whole closed loop in one call with the controller
-   inside the right-hand side. For the one-call version, look at three arguments:
-   `events` (stop when `||p* - p|| < epsilon`), `max_step` (the switch in `v` at
-   `||a|| = D` is a kink that an adaptive solver can step over), and `rtol`/`atol`.
+   inside the right-hand side. For the one-call version, look at `max_step` and
+   `rtol`/`atol`.
 4. **Exact solution.** With `w` constant, `dq/dt = w S q` is linear with constant
    coefficients, so `q(t) = expm(w t S) q(0)`. Use `S^2 = -I` in the power series of the
    matrix exponential and see which familiar 2x2 matrix comes out. Then integrate
@@ -36,8 +35,9 @@ of along a straight line in R^2. "Geometric integrator" is the search term.
 
 ## Choosing `dt`
 
-Near the goal the heading error obeys roughly `de/dt = -Kw e`. Forward Euler on that
-equation is stable only for `dt < 2 / Kw`, and accurate for `dt * Kw << 1`. The same
+For a linear error equation `de/dt = -k e`, forward Euler is stable only for
+`dt < 2 / k` and accurate for `dt * k << 1`. Linearise the closed loop about the
+reference to find the rates that play the role of `k` for the tracking law. The same
 limit applies to the 50 Hz rate of `controller_node`.
 
 ## C++

@@ -1,16 +1,14 @@
-"""Web UI backend for the Gazebo fleet. Streams ROS 2 topics to the browser.
+"""Web UI backend for the Gazebo robots. Streams ROS 2 topics to the browser.
 
-Subscribes: pose (geometry_msgs/PoseStamped), cmd_vel (geometry_msgs/Twist),
-            goal (geometry_msgs/PoseStamped): goals set elsewhere, such as RViz's
-            2D Goal Pose tool, are shown in the UI
-Publishes:  goal (geometry_msgs/PoseStamped, heading 0)
-Calls:      <controller_node>/enable, <controller_node>/set_parameters,
-            <controller_node>/get_parameters, /<follower>/controller_node/enable
+Per robot <name>, subscribes /<name>/pose (geometry_msgs/PoseStamped),
+/<name>/cmd_vel (geometry_msgs/Twist), /<name>/reference (geometry_msgs/PoseStamped),
+and for the first robot /<name>/reference_path (nav_msgs/Path), drawn on the map.
+Calls:      /<name>/controller_node/enable, set_parameters, get_parameters
 
-`followers` lists namespaces of other robots (gazebo_multi.launch.py) and `follows` the
-namespace each one follows. /<follower>/pose, /<follower>/cmd_vel and the follower's goal
-/<follows>/follow_goal are streamed as "fleet" messages, and Start and Stop also enable
-and disable /<follower>/controller_node. Gains are set on <controller_node> only.
+`robot_name` is the robot in "samples", which the plots show by default. `others` lists
+the other robots, streamed as "fleet" messages. Start and Stop enable and disable every
+controller, and parameters set in the UI go to every controller, since all of them track
+the same trajectory.
 
 rclpy spins in a background thread. aiohttp runs in the main thread.
 """
@@ -21,18 +19,43 @@ import threading
 
 import rclpy
 from geometry_msgs.msg import PoseStamped, Twist
+from nav_msgs.msg import Path
 from rcl_interfaces.msg import Parameter, ParameterType, ParameterValue
 from rcl_interfaces.srv import GetParameters, SetParameters
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
 from std_srvs.srv import SetBool
 
 from .server import Backend, UiServer, fleet_msg, hello_msg, samples_msg, status_msg
 
-# Controller parameters shown in the UI.
-PARAM_NAMES = ["v_star", "d_switch", "k_v", "k_w", "epsilon", "v_max", "w_max"]
+# Controller parameters shown in the UI. shape is a string, the rest are doubles.
+PARAM_NAMES = ["shape", "x0", "y0", "theta0", "circle_speed", "kappa", "a", "period",
+               "k_par", "k_perp", "k_q", "kappa_max", "w_max", "v_max", "path_time"]
 MAX_SAMPLES = 20000
+
+
+def planar(msg):
+    """(x, y, qx, qy) of a PoseStamped, or None when the body x axis is vertical."""
+    o = msg.pose.orientation
+    hx = 1.0 - 2.0 * (o.y * o.y + o.z * o.z)
+    hy = 2.0 * (o.x * o.y + o.w * o.z)
+    norm = math.hypot(hx, hy)
+    if norm < 1e-6:
+        return None
+    return msg.pose.position.x, msg.pose.position.y, hx / norm, hy / norm
+
+
+class Robot:
+    """Latest command and reference of one robot, and its sampled rows."""
+
+    def __init__(self, name):
+        self.name = name
+        self.rows = []
+        self.last_sample = -math.inf
+        self.last_pose = None
+        self.cmd = (0.0, 0.0)
+        self.ref = None  # [x, y] of p*
 
 
 class WebuiBridgeNode(Node, Backend):
@@ -40,31 +63,19 @@ class WebuiBridgeNode(Node, Backend):
     def __init__(self):
         super().__init__("webui_bridge_node")
         self.label = self.declare_parameter("backend_label", "Gazebo").value
-        self.frame_id = self.declare_parameter("frame_id", "map").value
-        controller = self.declare_parameter("controller_node", "controller_node").value
-        self.robot_name = self.declare_parameter("robot_name", "").value
-        self.followers = self.declare_parameter(
-            "followers", rclpy.Parameter.Type.STRING_ARRAY).value or []
-        follows = self.declare_parameter(
-            "follows", rclpy.Parameter.Type.STRING_ARRAY).value or []
-        if len(follows) != len(self.followers):
-            raise ValueError("follows needs one entry per entry of followers")
+        self.robot_name = self.declare_parameter("robot_name", "angostura").value
+        others = self.declare_parameter(
+            "others", rclpy.Parameter.Type.STRING_ARRAY).value or []
         host = self.declare_parameter("host", "0.0.0.0").value
         port = self.declare_parameter("port", 8000).value
         sample_rate = self.declare_parameter("sample_rate", 30.0).value
         self.sample_period = 1.0 / sample_rate
 
         self.lock = threading.Lock()
-        self.samples = []
-        self.fleet = {name: [] for name in self.followers}
-        self.fleet_last_sample = {name: -math.inf for name in self.followers}
-        self.fleet_cmd = {name: (0.0, 0.0) for name in self.followers}
-        self.fleet_goal = {name: None for name in self.followers}
+        self.robots = {name: Robot(name) for name in [self.robot_name, *others]}
+        self.main = self.robots[self.robot_name]
         self.t0 = None
-        self.last_sample_time = -math.inf
-        self.last_pose_time = None
-        self.cmd = (0.0, 0.0)
-        self.goal = None
+        self.path = []
         self.params = {}
         # Must match the controllers' start_enabled, so the UI status is right before Start.
         self.enabled = self.declare_parameter("start_enabled", False).value
@@ -72,28 +83,29 @@ class WebuiBridgeNode(Node, Backend):
 
         self.server = UiServer(self, host, port)
 
-        self.goal_pub = self.create_publisher(PoseStamped, "goal", 10)
-        self.create_subscription(PoseStamped, "goal", self.on_goal, 10)
-        self.create_subscription(PoseStamped, "pose", self.on_pose, qos_profile_sensor_data)
-        self.create_subscription(Twist, "cmd_vel", self.on_cmd, 10)
-        self.enable_client = self.create_client(SetBool, f"{controller}/enable")
-        self.extra_enable_clients = [
-            self.create_client(SetBool, f"/{name}/controller_node/enable")
-            for name in self.followers]
-        for name, leader in zip(self.followers, follows):
+        self.enable_clients = []
+        for name, robot in self.robots.items():
             self.create_subscription(
                 PoseStamped, f"/{name}/pose",
-                lambda msg, name=name: self.on_follower_pose(name, msg), qos_profile_sensor_data)
+                lambda msg, robot=robot: self.on_pose(robot, msg), qos_profile_sensor_data)
             self.create_subscription(
                 Twist, f"/{name}/cmd_vel",
-                lambda msg, name=name: self.fleet_cmd.__setitem__(
-                    name, (msg.linear.x, msg.angular.z)), 10)
+                lambda msg, robot=robot: setattr(robot, "cmd", (msg.linear.x, msg.angular.z)),
+                10)
             self.create_subscription(
-                PoseStamped, f"/{leader}/follow_goal",
-                lambda msg, name=name: self.fleet_goal.__setitem__(
-                    name, [msg.pose.position.x, msg.pose.position.y]), 10)
-        self.set_params_client = self.create_client(SetParameters, f"{controller}/set_parameters")
-        self.get_params_client = self.create_client(GetParameters, f"{controller}/get_parameters")
+                PoseStamped, f"/{name}/reference",
+                lambda msg, robot=robot: setattr(
+                    robot, "ref", [msg.pose.position.x, msg.pose.position.y]), 10)
+            self.enable_clients.append(
+                self.create_client(SetBool, f"/{name}/controller_node/enable"))
+        self.create_subscription(
+            Path, f"/{self.robot_name}/reference_path", self.on_path,
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.set_params_clients = [
+            self.create_client(SetParameters, f"/{name}/controller_node/set_parameters")
+            for name in self.robots]
+        self.get_params_client = self.create_client(
+            GetParameters, f"/{self.robot_name}/controller_node/get_parameters")
         self.create_timer(0.2, self.on_status_timer)
         self.create_timer(1.0, self.fetch_params)
 
@@ -102,79 +114,41 @@ class WebuiBridgeNode(Node, Backend):
     def now(self):
         return self.get_clock().now().nanoseconds * 1e-9
 
-    def on_goal(self, msg):
-        """Also receives this node's own goals; it only updates the UI, so there is no loop."""
-        goal = [msg.pose.position.x, msg.pose.position.y]
+    def on_path(self, msg):
         with self.lock:
-            changed = goal != self.goal
-            self.goal = goal
-        if changed:
-            self.server.broadcast_threadsafe(self.config_msg())
+            self.path = [[p.pose.position.x, p.pose.position.y] for p in msg.poses]
+        self.server.broadcast_threadsafe(self.config_msg())
 
-    def on_cmd(self, msg):
-        self.cmd = (msg.linear.x, msg.angular.z)
-
-    def planar(self, msg):
-        """(x, y, qx, qy) of a PoseStamped, or None when the body x axis is vertical."""
-        o = msg.pose.orientation
-        hx = 1.0 - 2.0 * (o.y * o.y + o.z * o.z)
-        hy = 2.0 * (o.x * o.y + o.w * o.z)
-        norm = math.hypot(hx, hy)
-        if norm < 1e-6:
-            return None
-        return msg.pose.position.x, msg.pose.position.y, hx / norm, hy / norm
-
-    def on_follower_pose(self, name, msg):
+    def on_pose(self, robot, msg):
         now = self.now()
-        if now - self.fleet_last_sample[name] < self.sample_period:
+        robot.last_pose = now
+        if now - robot.last_sample < self.sample_period:
             return
-        pose = self.planar(msg)
+        pose = planar(msg)
         if pose is None:
             return
-        x, y, _, _ = pose
-        goal = self.fleet_goal[name]
-        v, w = self.fleet_cmd[name]
-        dist = math.hypot(goal[0] - x, goal[1] - y) if goal else 0.0
+        x, y = pose[0], pose[1]
+        ref = robot.ref
+        dist = math.hypot(ref[0] - x, ref[1] - y) if ref else 0.0
+        xr, yr = ref if ref else (None, None)  # null in JSON
         with self.lock:
             if self.t0 is None:
                 self.t0 = now
-            row = [now - self.t0, *pose, v, w, dist]
-            self.fleet[name].append(row)
-            del self.fleet[name][:-MAX_SAMPLES]
-        self.fleet_last_sample[name] = now
-        self.server.broadcast_threadsafe(fleet_msg({name: [row]}, {name: goal} if goal else {}))
-
-    def on_pose(self, msg):
-        now = self.now()
-        self.last_pose_time = now
-        if now - self.last_sample_time < self.sample_period:
-            return
-        pose = self.planar(msg)
-        if pose is None:
-            return
-        x, y, qx, qy = pose
-        with self.lock:
-            if self.t0 is None:
-                self.t0 = now
-            dist = math.hypot(self.goal[0] - x, self.goal[1] - y) if self.goal else 0.0
-            row = [now - self.t0, x, y, qx, qy, self.cmd[0], self.cmd[1], dist]
-            self.samples.append(row)
-            del self.samples[:-MAX_SAMPLES]
-        self.last_sample_time = now
-        self.server.broadcast_threadsafe(samples_msg([row]))
+            row = [now - self.t0, *pose, robot.cmd[0], robot.cmd[1], dist, xr, yr]
+            robot.rows.append(row)
+            del robot.rows[:-MAX_SAMPLES]
+        robot.last_sample = now
+        if robot is self.main:
+            self.server.broadcast_threadsafe(samples_msg([row]))
+        else:
+            self.server.broadcast_threadsafe(fleet_msg({robot.name: [row]}))
 
     def on_status_timer(self):
-        pose_topic = self.resolve_topic_name("pose")
         with self.lock:
-            last = self.samples[-1] if self.samples else None
-            epsilon = self.params.get("epsilon")
-            if self.last_pose_time is None or self.now() - self.last_pose_time > 1.0:
+            last_pose = self.main.last_pose
+            if last_pose is None or self.now() - last_pose > 1.0:
                 status = status_msg("running" if self.enabled else "idle",
-                                    f"no pose on {pose_topic}")
-            elif self.enabled and self.goal and epsilon and last and last[7] < epsilon:
-                status = status_msg("reached")
-            elif self.enabled and not self.goal:
-                status = status_msg("running", "no goal set")
+                                    f"no pose on /{self.robot_name}/pose")
             else:
                 status = status_msg("running" if self.enabled else "idle")
             changed = status != self.status
@@ -194,91 +168,82 @@ class WebuiBridgeNode(Node, Backend):
             for name, value in zip(PARAM_NAMES, values):
                 if value.type == ParameterType.PARAMETER_DOUBLE:
                     self.params[name] = value.double_value
+                elif value.type == ParameterType.PARAMETER_STRING:
+                    self.params[name] = value.string_value
         self.server.broadcast_threadsafe(self.config_msg())
 
     # -------------------------------------------------------- asyncio thread
 
     def config_msg(self):
         with self.lock:
-            return {"type": "config", "params": dict(self.params), "goal": self.goal,
+            return {"type": "config", "params": dict(self.params), "path": list(self.path),
                     "initial": None}
 
     def on_connect(self):
         with self.lock:
-            samples = list(self.samples)
-            fleet = {name: list(rows) for name, rows in self.fleet.items()}
-            goals = {name: g for name, g in self.fleet_goal.items() if g}
+            samples = list(self.main.rows)
+            fleet = {r.name: list(r.rows) for r in self.robots.values() if r is not self.main}
             status = self.status
         # Robots spawn where the fleet file says, so the UI has no initial-pose controls.
         return [hello_msg(self.label, "live", False, self.robot_name), self.config_msg(),
-                samples_msg(samples, reset=True), fleet_msg(fleet, goals, reset=True), status]
+                samples_msg(samples, reset=True), fleet_msg(fleet, reset=True), status]
 
     async def on_message(self, msg):
         kind = msg.get("type")
-        if kind == "set_goal":
-            with self.lock:
-                self.goal = [float(msg["x"]), float(msg["y"])]
-            self.publish_goal()
-            await self.server.broadcast(self.config_msg())
-        elif kind == "set_params":
-            self.set_params({k: float(v) for k, v in msg["params"].items() if k in PARAM_NAMES})
+        if kind == "set_params":
+            self.set_params({k: v for k, v in msg["params"].items() if k in PARAM_NAMES})
         elif kind == "start":
-            self.publish_goal()
             self.set_enabled(True)
         elif kind == "stop":
             self.set_enabled(False)
         elif kind == "reset":
             self.set_enabled(False)
             with self.lock:
-                self.samples = []
-                self.fleet = {name: [] for name in self.followers}
+                for robot in self.robots.values():
+                    robot.rows = []
                 self.t0 = None
             await self.server.broadcast(samples_msg([], reset=True))
             await self.server.broadcast(fleet_msg({}, reset=True))
 
-    def publish_goal(self):
-        if self.goal is None:
-            return
-        msg = PoseStamped()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = self.frame_id
-        msg.pose.position.x, msg.pose.position.y = self.goal
-        msg.pose.orientation.w = 1.0
-        self.goal_pub.publish(msg)
-
     def set_enabled(self, enabled):
-        if not self.enable_client.service_is_ready():
-            self.report_error(f"{self.enable_client.srv_name} is not available")
-            return
-        future = self.enable_client.call_async(SetBool.Request(data=enabled))
-
-        def done(f):
-            if f.result().success:
-                self.enabled = enabled
-        future.add_done_callback(done)
-        for client in self.extra_enable_clients:
-            if client.service_is_ready():
-                client.call_async(SetBool.Request(data=enabled))
-            else:
+        for i, client in enumerate(self.enable_clients):
+            if not client.service_is_ready():
                 self.report_error(f"{client.srv_name} is not available")
+                continue
+            future = client.call_async(SetBool.Request(data=enabled))
+
+            def done(f, main=(i == 0)):
+                result = f.result()
+                if not result.success:
+                    self.report_error(result.message or "controller refused to enable")
+                elif main:
+                    self.enabled = enabled
+            future.add_done_callback(done)
 
     def set_params(self, params):
-        if not self.set_params_client.service_is_ready():
-            self.report_error(f"{self.set_params_client.srv_name} is not available")
-            return
-        request = SetParameters.Request(parameters=[
-            Parameter(name=name, value=ParameterValue(
-                type=ParameterType.PARAMETER_DOUBLE, double_value=value))
-            for name, value in params.items()])
-        future = self.set_params_client.call_async(request)
+        parameters = []
+        for name, value in params.items():
+            if name == "shape":
+                pv = ParameterValue(type=ParameterType.PARAMETER_STRING, string_value=str(value))
+            else:
+                pv = ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=float(value))
+            parameters.append(Parameter(name=name, value=pv))
+        for i, client in enumerate(self.set_params_clients):
+            if not client.service_is_ready():
+                self.report_error(f"{client.srv_name} is not available")
+                continue
+            future = client.call_async(SetParameters.Request(parameters=parameters))
 
-        def done(f):
-            with self.lock:
+            def done(f, main=(i == 0)):
                 for (name, value), result in zip(params.items(), f.result().results):
-                    if result.successful:
-                        self.params[name] = value
-            self.server.broadcast_threadsafe(self.config_msg())
-        future.add_done_callback(done)
+                    if not result.successful:
+                        self.report_error(f"{name} rejected: {result.reason}")
+                    elif main:
+                        with self.lock:
+                            self.params[name] = value
+                if main:
+                    self.server.broadcast_threadsafe(self.config_msg())
+            future.add_done_callback(done)
 
     def report_error(self, message):
         self.get_logger().error(message)

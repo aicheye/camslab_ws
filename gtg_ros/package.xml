@@ -3,7 +3,7 @@
 <package format="3">
   <name>gtg_ros</name>
   <version>0.1.0</version>
-  <description>Go-to-goal controller and simulated unicycle plant for ROS 2.</description>
+  <description>Trajectory tracking controller for Yahboom R2s in Gazebo, ROS 2.</description>
   <maintainer email="seanxxyang@gmail.com">Sean Yang</maintainer>
   <license>Proprietary</license>
 
@@ -11,6 +11,7 @@
 
   <depend>rclcpp</depend>
   <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
   <depend>std_srvs</depend>
   <depend>tf2_ros</depend>
 
