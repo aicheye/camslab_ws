@@ -1,3 +1,3 @@
 {
-  "cmake.sourceDirectory": "/home/aicheye/Repos/go-to-goal/gtg_ros"
+  "cmake.sourceDirectory": "${workspaceFolder}/gtg_ros"
 }

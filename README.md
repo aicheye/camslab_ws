@@ -18,12 +18,12 @@ Both serve the same web UI (`gtg_webui/`) on http://localhost:8000.
 
 ## What is left to implement
 
+The circle, `reference()`, `control()` and `step()` are written in Python and C++. Left:
+
 | File | Function |
 |---|---|
-| `gtg_sim/gtg_sim/trajectory.py` | `Circle` and `Gerono`: `position()`, `velocity()`, `acceleration()`; `reference()` |
-| `gtg_sim/gtg_sim/controller.py` | `control()` |
-| `gtg_ros/src/trajectory.cpp` | the same trajectory functions in C++ |
-| `gtg_ros/src/controller.cpp` | `control()` |
+| `gtg_sim/gtg_sim/trajectory.py` | `Gerono`: `position()`, `velocity()`, `acceleration()` |
+| `gtg_ros/src/trajectory.cpp` | the same Gerono functions in C++ |
 
 `velocity()` and `acceleration()` are the first and second time derivatives of
 `position()`, worked out by hand. `reference()` turns the three into p*, q*, v*, w* and
@@ -67,13 +67,28 @@ limit, unlike the Ackermann car in Gazebo.
 
 ## Gazebo + RViz
 
-ROS 2 Humble with Gazebo Fortress, in the container (the repo root is a colcon source
-directory):
+ROS 2 Humble with Gazebo Fortress (`ros-humble-ros-gz`), on Ubuntu 22.04 or in Docker.
+The repo root is a colcon workspace: `build/`, `install/` and `log/` go next to the
+packages and are ignored by git. `gtg_sim` has a `COLCON_IGNORE` and is not built.
+
+On a host with ROS 2 Humble installed:
+
+    source /opt/ros/humble/setup.bash
+    cd go-to-goal
+    rosdep install --from-paths . --ignore-src -y   # Gazebo bridge, RViz, xacro, aiohttp, ...
+    colcon build --symlink-install
+    source install/setup.bash
+    ros2 launch gtg_ros gazebo_multi.launch.py
+
+In Docker (`docker/Dockerfile` runs the same `rosdep install`):
 
     xhost +local:                                   # on the host, once per login, for RViz
     docker compose -f docker/compose.yaml run --rm ros
     colcon build --symlink-install && source install/setup.bash
     ros2 launch gtg_ros gazebo_multi.launch.py
+
+Rebuild the image (`docker compose -f docker/compose.yaml build`) after adding a
+dependency to a `package.xml`.
 
 | Argument | Default | |
 |---|---|---|
@@ -104,9 +119,8 @@ Per robot, in namespace `<name>` (Gazebo model `<name>`):
 | Node | Subscribes | Publishes |
 |---|---|---|
 | `controller_node` (C++) | `pose` | `cmd_vel`, `reference` (PoseStamped), `reference_path` (Path, transient local) |
-| `parameter_bridge` | Gazebo pose, joint states; `cmd_vel` | `pose`, `gazebo/joint_states`; Gazebo `cmd_vel` |
-| `joint_state_publisher` | `gazebo/joint_states` | `joint_states`, stamped with wall time |
-| `robot_state_publisher` | `joint_states`, `urdf/r2.urdf.xacro` | TF `<name>/base_footprint -> <name>/*_link` |
+| `parameter_bridge` | Gazebo pose, joint states; `cmd_vel` | `pose`, `joint_states`; Gazebo `cmd_vel` |
+| `robot_state_publisher` | `joint_states`, `urdf/r2.urdf.xacro` | TF `<name>/base_footprint -> <name>/*_link`, at most 60 Hz |
 | `pose_tf_node` (C++) | `pose` | TF `map -> <name>/base_footprint` |
 
 `controller_node` clamps each command to `|v| <= v_max` and
@@ -115,6 +129,11 @@ Per robot, in namespace `<name>` (Gazebo model `<name>`):
 switches it; enabling fails while the trajectory breaks the limits. Trajectory, gains
 and limits are in `config/params.yaml` and can change at runtime. Frames follow
 REP-105/120.
+
+Every node runs on Gazebo's simulation clock (`use_sim_time`, `/clock` bridged by
+`gazebo_multi.launch.py`). The body TF from `pose` and the wheel TF from `joint_states`
+carry Gazebo's stamps, so RViz draws the wheels on the body, and the trajectory clock
+follows the simulation when Gazebo runs slower than real time.
 
 `webui_bridge_node` runs in the root namespace. It plots the first robot in the fleet
 file or any other ("Plots for"), and draws every robot, its p*, and the first robot's
@@ -126,12 +145,18 @@ reference path. Reset stops the controllers and clears the plots.
 |---|---|
 | `models/r2/model.sdf` | R2 with an Ackermann front axle. Geometry and meshes from Yahboom's `yahboomcar_R2.urdf.xacro`: wheelbase 0.235 m, track 0.1685 m, wheel radius 0.0345 m, steering limit 0.6 rad. `urdf/r2.urdf.xacro` repeats this geometry for RViz; change both together. |
 | `AckermannSteering` system | reads `cmd_vel` as `linear.x` = v [m/s], `angular.z` = w [rad/s] and sets the steering angle from v / w. The car cannot turn in place: `|w| <= |v| tan(0.6) / 0.235`. |
-| `PosePublisher`, `JointStatePublisher` systems | model pose (100 Hz, frame at the ground below `base_link`) and wheel and steering joint states |
+| `PosePublisher`, `JointStatePublisher` systems | model pose (100 Hz) and wheel and steering joint states (every 1 ms physics step) |
 | `worlds/gui.config` | Gazebo window (`gui:=true`): camera over x, y in [0, 6] m and a 1 m grid |
 
 The Gazebo car holds its last `cmd_vel`. `controller_node` publishes zero while disabled.
-`IGN_PARTITION` in `docker/compose.yaml` keeps Gazebo sims in different `ROS_DOMAIN_ID`s
-apart.
+The model frame, `base_footprint`, is on the ground at the middle of the rear axle,
+0.116 m behind `base_link`. That point of an Ackermann car moves as a unicycle,
+`dp/dt = v q`, which is the plant the control law assumes; tracking the body centre
+instead leaves a 0.137 m steady error on the default circle. Fleet spawn poses place
+this point.
+
+The launch files set `IGN_PARTITION=gtg_<ROS_DOMAIN_ID>` unless it is already set, so
+Gazebo sims in different `ROS_DOMAIN_ID`s on one network stay apart.
 
 ## Web UI
 

@@ -22,10 +22,16 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction
-from launch.substitutions import Command, LaunchConfiguration
+from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVariable
+from launch.substitutions import Command, EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node, PushRosNamespace, SetParameter
 from launch_ros.parameter_descriptions import ParameterValue
+
+# Same as gazebo_multi.launch.py, so a robot added to a running world joins its partition.
+def ign_partition():
+    return SetEnvironmentVariable("IGN_PARTITION", EnvironmentVariable(
+        "IGN_PARTITION",
+        default_value=["gtg_", EnvironmentVariable("ROS_DOMAIN_ID", default_value="0")]))
 
 
 def generate_launch_description():
@@ -49,6 +55,7 @@ def generate_launch_description():
         DeclareLaunchArgument("start_enabled", default_value="true",
                               description="controller drives as soon as it has a pose"),
 
+        ign_partition(),
         GroupAction([
             PushRosNamespace(name),
             SetParameter("use_sim_time", True),

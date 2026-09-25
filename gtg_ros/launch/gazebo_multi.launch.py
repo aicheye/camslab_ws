@@ -1,5 +1,7 @@
 """Yahboom R2s tracking a reference trajectory in Gazebo Fortress, with RViz and the web UI.
 
+ROS 2 Humble with Gazebo Fortress, in docker/ or installed on the host (README.md).
+
     ros2 launch gtg_ros gazebo_multi.launch.py                       # config/fleet.yaml
     ros2 launch gtg_ros gazebo_multi.launch.py fleet:=/path/to/other.yaml
 
@@ -29,7 +31,7 @@ from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction,
                             SetEnvironmentVariable)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node, SetParameter
 
 # Names a fleet file's `color` can use in place of [r, g, b].
@@ -47,6 +49,13 @@ COLORS = {
     "black": [0.1, 0.1, 0.1],
 }
 DEFAULT_COLOR = "green"
+
+# Gazebo transport ignores ROS_DOMAIN_ID, so sims in different domains on one network would
+# see each other's topics. The partition follows the domain unless IGN_PARTITION is set.
+def ign_partition():
+    return SetEnvironmentVariable("IGN_PARTITION", EnvironmentVariable(
+        "IGN_PARTITION",
+        default_value=["gtg_", EnvironmentVariable("ROS_DOMAIN_ID", default_value="0")]))
 
 
 def load_fleet(path):
@@ -191,7 +200,10 @@ def generate_launch_description():
         DeclareLaunchArgument("rviz", default_value="true", description="start RViz"),
         DeclareLaunchArgument("webui", default_value="true",
                               description="start the web UI (optional)"),
-        SetEnvironmentVariable("IGN_GAZEBO_RESOURCE_PATH", os.path.join(share, "models")),
+        ign_partition(),
+        SetEnvironmentVariable("IGN_GAZEBO_RESOURCE_PATH", [
+            EnvironmentVariable("IGN_GAZEBO_RESOURCE_PATH", default_value=""), ":",
+            os.path.join(share, "models")]),
         SetParameter("use_sim_time", True),
         OpaqueFunction(function=robots),
     ])

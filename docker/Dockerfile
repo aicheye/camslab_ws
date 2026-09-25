@@ -1,14 +1,15 @@
+# ROS 2 Humble + Gazebo Fortress with the dependencies of every package in the repo.
+# compose.yaml builds this with the repo root as the context.
 FROM ros:humble-ros-base
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      python3-aiohttp \
-      ros-humble-ros-gz \
-      ros-humble-robot-state-publisher \
-      ros-humble-joint-state-publisher \
-      ros-humble-xacro \
-      ros-humble-rviz2 \
-      ros-humble-rqt-graph \
-    && rm -rf /var/lib/apt/lists/*
+# rosdep reads the package.xml files, the same way a bare-metal install does (README.md).
+COPY gtg_ros/package.xml /tmp/deps/gtg_ros/package.xml
+COPY gtg_webui/package.xml /tmp/deps/gtg_webui/package.xml
+RUN apt-get update \
+    && rosdep update --rosdistro humble \
+    && rosdep install --from-paths /tmp/deps --ignore-src -y \
+    && apt-get install -y --no-install-recommends ros-humble-rqt-graph \
+    && rm -rf /var/lib/apt/lists/* /tmp/deps
 
 ENV PYTHONDONTWRITEBYTECODE=1
 # Interactive shells source the workspace overlay when it has been built.

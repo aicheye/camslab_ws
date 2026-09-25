@@ -1,7 +1,7 @@
 [project]
 name = "gtg-sim"
 version = "0.1.0"
-description = "Closed-loop offline simulation of the go-to-goal controller."
+description = "Offline closed-loop simulation of the trajectory tracking controller."
 requires-python = ">=3.10"
 dependencies = [
     "numpy",
