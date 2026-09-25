@@ -3,7 +3,7 @@
 <package format="3">
   <name>gtg_webui</name>
   <version>0.1.0</version>
-  <description>Web UI shared by the go-to-goal Python sim and the ROS 2 nodes.</description>
+  <description>Web UI shared by the offline Python sim and the ROS 2 nodes.</description>
   <maintainer email="seanxxyang@gmail.com">Sean Yang</maintainer>
   <license>Proprietary</license>
 

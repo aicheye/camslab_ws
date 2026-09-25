@@ -15,7 +15,7 @@ setup(
     zip_safe=True,
     maintainer="Sean Yang",
     maintainer_email="seanxxyang@gmail.com",
-    description="Web UI shared by the go-to-goal Python sim and the ROS 2 nodes.",
+    description="Web UI shared by the offline Python sim and the ROS 2 nodes.",
     license="Proprietary",
     entry_points={
         "console_scripts": ["webui_bridge_node = gtg_webui.webui_bridge_node:main"],

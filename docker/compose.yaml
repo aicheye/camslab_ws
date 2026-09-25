@@ -1,4 +1,4 @@
-# ROS 2 Humble shell with the repo mounted as /ws/src/go-to-goal.
+# ROS 2 Humble shell with the repo mounted as /ws/src/camslab-gz.
 #   docker compose -f docker/compose.yaml run --rm ros
 services:
   ros:
@@ -18,7 +18,7 @@ services:
       - label=disable            # SELinux: allow the X11 socket without relabelling it
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:ro
-      - ..:/ws/src/go-to-goal:z
+      - ..:/ws/src/camslab-gz:z
       - ws_build:/ws/build
       - ws_install:/ws/install
       - ws_log:/ws/log

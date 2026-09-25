@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<!-- Flat floor for the go-to-goal Gazebo sim. robot.launch.py spawns each R2. -->
+<!-- Flat floor for the Gazebo sim. robot.launch.py spawns each R2. -->
 <sdf version="1.8">
   <world name="gtg">
     <physics name="1ms" type="ignored">

@@ -1,4 +1,4 @@
-# go-to-goal
+# camslab-gz
 
 Trajectory tracking for a Yahboom ROSMASTER R2 (Ackermann) driven through a
 differential-drive `(v, w)` interface. The robot follows a reference p*(t), first a
@@ -74,7 +74,7 @@ packages and are ignored by git. `gtg_sim` has a `COLCON_IGNORE` and is not buil
 On a host with ROS 2 Humble installed:
 
     source /opt/ros/humble/setup.bash
-    cd go-to-goal
+    cd camslab-gz
     rosdep install --from-paths . --ignore-src -y   # Gazebo bridge, RViz, xacro, aiohttp, ...
     colcon build --symlink-install
     source install/setup.bash
