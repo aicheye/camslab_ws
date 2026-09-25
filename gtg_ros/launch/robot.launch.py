@@ -7,12 +7,15 @@ runs in namespace <name>:
 
   Gazebo model <name>, spawned into the world `gtg`
   parameter_bridge   /model/<name>/pose -> pose,  cmd_vel -> /model/<name>/cmd_vel,
-                     /world/<world>/model/<name>/joint_state -> gazebo/joint_states
+                     /world/<world>/model/<name>/joint_state -> joint_states
   controller_node    pose -> cmd_vel, reference, reference_path
-  joint_state_publisher   republishes gazebo/joint_states on joint_states, stamped
-                          with wall time (Gazebo stamps with simulation time)
-  robot_state_publisher   r2.urdf.xacro (body colour `color`) + joint_states -> TF <name>/<link>
+  robot_state_publisher   r2.urdf.xacro (body colour `color`) + joint_states -> TF
+                          <name>/<link>, at most 60 Hz (Gazebo sends joint_states every
+                          1 ms physics step)
   pose_tf_node       pose -> TF map -> <name>/base_footprint
+
+Every node uses the Gazebo simulation clock (use_sim_time), so TF from the pose and from
+the joint states share one time base. gazebo_multi.launch.py bridges /clock.
 """
 
 import os
@@ -21,7 +24,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, GroupAction
 from launch.substitutions import Command, LaunchConfiguration
-from launch_ros.actions import Node, PushRosNamespace
+from launch_ros.actions import Node, PushRosNamespace, SetParameter
 from launch_ros.parameter_descriptions import ParameterValue
 
 
@@ -48,6 +51,7 @@ def generate_launch_description():
 
         GroupAction([
             PushRosNamespace(name),
+            SetParameter("use_sim_time", True),
             Node(package="ros_gz_sim", executable="create", output="screen",
                  arguments=["-world", world, "-name", name,
                             "-file", os.path.join(share, "models", "r2", "model.sdf"),
@@ -64,16 +68,14 @@ def generate_launch_description():
                  remappings=[(["/model/", name, "/pose"], "pose"),
                              (["/model/", name, "/cmd_vel"], "cmd_vel"),
                              (["/world/", world, "/model/", name, "/joint_state"],
-                              "gazebo/joint_states")]),
+                              "joint_states")]),
             Node(package="gtg_ros", executable="controller_node", output="screen",
                  parameters=[LaunchConfiguration("params"),
                              {"start_enabled": ParameterValue(
                                  LaunchConfiguration("start_enabled"), value_type=bool)}]),
             Node(package="robot_state_publisher", executable="robot_state_publisher",
                  parameters=[{"robot_description": robot_description,
-                              "frame_prefix": [name, "/"]}]),
-            Node(package="joint_state_publisher", executable="joint_state_publisher",
-                 parameters=[{"source_list": ["gazebo/joint_states"], "rate": 30}]),
+                              "frame_prefix": [name, "/"], "publish_frequency": 60.0}]),
             Node(package="gtg_ros", executable="pose_tf_node",
                  parameters=[{"child_frame": [name, "/base_footprint"]}]),
         ]),

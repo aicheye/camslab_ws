@@ -30,7 +30,7 @@ from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription, Opa
                             SetEnvironmentVariable)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import Node, SetParameter
 
 # Names a fleet file's `color` can use in place of [r, g, b].
 COLORS = {
@@ -149,6 +149,11 @@ def robots(context):
             os.path.join(get_package_share_directory("ros_gz_sim"), "launch", "gz_sim.launch.py")),
         launch_arguments={"gz_args": gz_args}.items())]
 
+    # Simulation time for every node, from Gazebo's clock.
+    actions.append(Node(package="ros_gz_bridge", executable="parameter_bridge",
+                        name="clock_bridge", output="log",
+                        arguments=["/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock"]))
+
     robot_launch = os.path.join(share, "launch", "robot.launch.py")
     for robot in fleet:
         actions.append(IncludeLaunchDescription(
@@ -187,5 +192,6 @@ def generate_launch_description():
         DeclareLaunchArgument("webui", default_value="true",
                               description="start the web UI (optional)"),
         SetEnvironmentVariable("IGN_GAZEBO_RESOURCE_PATH", os.path.join(share, "models")),
+        SetParameter("use_sim_time", True),
         OpaqueFunction(function=robots),
     ])

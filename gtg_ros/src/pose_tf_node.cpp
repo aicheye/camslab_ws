@@ -3,8 +3,8 @@
 // Subscribes: pose (geometry_msgs/PoseStamped)
 // Publishes:  /tf  parent_frame -> child_frame
 //
-// The transform is stamped with this node's clock, not the pose's stamp, because
-// Gazebo stamps poses with simulation time and RViz runs on wall time.
+// The transform carries the pose's stamp, which is Gazebo simulation time. Run with
+// use_sim_time so it matches the joint transforms from robot_state_publisher.
 
 #include <memory>
 #include <string>
@@ -30,7 +30,7 @@ public:
       "pose", rclcpp::SensorDataQoS(),
       [this](geometry_msgs::msg::PoseStamped::ConstSharedPtr msg) {
         geometry_msgs::msg::TransformStamped tf;
-        tf.header.stamp = now();
+        tf.header.stamp = msg->header.stamp;
         tf.header.frame_id = parent_frame_;
         tf.child_frame_id = child_frame_;
         tf.transform.translation.x = msg->pose.position.x;
