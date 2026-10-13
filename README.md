@@ -1,8 +1,11 @@
 # camslab_ws
 
-User documentation for lab members, written for people without ROS experience, is in
-`docs/` and is built by Read the Docs (`.readthedocs.yaml`). To build it locally:
-`uv run --no-project --with-requirements docs/requirements.txt sphinx-build docs docs/_build/html`.
+Read the user documentation for lab members, written for people without ROS experience,
+in
+[`docs/`](docs/) and is built by Read the Docs (`.readthedocs.yaml`). Start with the
+[documentation home page](docs/index.md). To build it locally:
+
+    uv run --no-project --with-requirements docs/requirements.txt sphinx-build docs docs/_build/html
 
 Trajectory tracking for a Yahboom ROSMASTER R2 (Ackermann) driven through a
 differential-drive `(v, w)` interface. The robot follows a reference p*(t), a circle, a
@@ -154,7 +157,7 @@ and parameters set in it go to every controller.
 angostura; the others are commented out because every robot tracks the same p*(t) and
 they would collide. `gazebo_multi.launch.py` starts the world, RViz, and the web UI, and
 includes `robot.launch.py` once per fleet entry with `name:=<name>` and the spawn pose.
-`robot.launch.py` can also add one robot to a running world:
+Add one robot to a running world with `robot.launch.py`:
 `ros2 launch camslab robot.launch.py name:=ferret x:=1 y:=2`.
 
 Per robot, in namespace `<name>` (Gazebo model `<name>`):
@@ -171,7 +174,7 @@ Per robot, in namespace `<name>` (Gazebo model `<name>`):
 `pose_timeout`. It starts disabled unless `start_enabled`, and `~/enable` (SetBool)
 switches it; enabling fails while the trajectory breaks the limits. Trajectory, gains
 and limits are in `config/params.yaml` (`kappa_max` in `sim.yaml` or `live.yaml`) and
-can change at runtime. Frames follow
+Change these parameters at runtime. Frames follow
 REP-105/120.
 
 Every node runs on Gazebo's simulation clock (`use_sim_time`, `/clock` bridged by

@@ -8,15 +8,20 @@
 | `gerono` | figure eight | `x0`, `y0`, `theta0`, `a`, `b`, `period`, `phi0` |
 | `ellipse` | ellipse | `x0`, `y0`, `theta0`, `a`, `b`, `period`, `phi0` |
 | `rectangle` | rectangle | `x0`, `y0`, `theta0`, `a`, `b`, `period` |
-| `spline` | your own smooth loop (below) | `control_points`, `period` |
+| `spline` | custom closed curve (see below) | `control_points`, `period` |
 
-In the web UI, pick a shape, type its numbers or press **Random**, and press Enter. The path restarts from its beginning.
+Change the path in the web UI by selecting a shape, entering its parameters (or pressing
+**Random**), and pressing Enter. The path restarts from the beginning.
 
-The car steers like a normal car, so its tightest turn has a radius of about 0.34 m. A path that bends more sharply than that, or turns faster than `w_max`, still runs, but the car falls behind there and the web UI says where. The rectangle's corners are an example: the error rises after each one.
+The car has Ackermann steering and a minimum turning radius of about 0.34 m. A tighter
+path or a path faster than `w_max` still runs, but the car cannot follow those sections
+exactly. Read the warning in the web UI. Expect the tracking error to jump at each
+rectangle corner.
 
 ## Settings
 
-Defaults are in `camslab/config/params.yaml`. Edit it and restart the simulator; no rebuild is needed. **Write every number with a decimal point** (`2.0`, not `2`).
+Edit the default parameters in `camslab/config/params.yaml`, then restart the simulator.
+Do not rebuild. Write every number with a decimal point: `2.0`, not `2`.
 
 | Setting | Meaning |
 |---|---|
@@ -24,29 +29,39 @@ Defaults are in `camslab/config/params.yaml`. Edit it and restart the simulator;
 | `theta0` | circle start heading, or the direction of side `a`, rad |
 | `kappa` | circle curvature = 1 / radius, 1/m. Negative turns right. |
 | `circle_speed` | circle speed, m/s |
-| `a`, `b` | half-sizes along and across `theta0`, m |
+| `a`, `b` | half-lengths along and perpendicular to `theta0`, m |
 | `period` | time for one lap, s |
-| `phi0` | starting point on the figure eight or ellipse, rad |
+| `phi0` | starting phase on the figure eight or ellipse, rad |
 | `k_par` | gain on the error along the car's heading |
 | `k_perp` | gain on the error across the car's heading |
 | `k_q` | gain on the heading error |
 | `v_max`, `w_max` | command limits, m/s and rad/s |
 
-To change a setting while the simulator runs, from a second terminal:
+Change a parameter while the simulator is running:
 
 ```bash
 ros2 param set /angostura/controller k_perp 8.0
 ```
 
-## Draw your own path (spline)
+Changing a trajectory parameter restarts the reference clock and republishes the path.
+Changing a gain or command limit takes effect without changing the path. A parameter
+change that violates `kappa_max` or `w_max` is accepted with a warning, but the command
+still respects the configured saturation limits.
 
-With `shape` set to `spline`, the car drives a smooth loop around a list of control points. The loop passes near the points, not through them, and stays inside the outline of the outermost points. Points closer together make tighter turns.
+## Draw a custom path (spline)
 
-1. Pick `spline` and tick **edit** in the **Spline control points** box.
-2. Click to add a point, drag to move one, Shift-click to remove one. At least 4 points.
-3. Press **Apply**, then untick **edit**.
+The `spline` shape is a closed cubic B-spline defined by a list of control points. The curve does not pass through the control points, but it always stays inside their convex hull. Placing points closer together makes tighter turns.
 
-Points set in the web UI are lost when the simulator stops. To keep them, copy them into `params.yaml` as `x, y` pairs:
+```{image} images/spline.png
+:alt: Editing spline control points in the web UI
+```
+
+1. Select `spline` and check **edit** in the **Spline control points** box.
+2. Click the map to add a point, drag a point to move it, and Shift-click a point to remove it. Add at least 4 points.
+3. Press **Apply**, then uncheck **edit**.
+
+The web UI does not save control points when the simulator stops. Save them in
+`params.yaml` as a flat list of `x, y` pairs:
 
 ```yaml
 control_points: [1.0, 0.8, 2.5, 1.2, 4.0, 0.8, 4.4, 2.5, 2.5, 3.2, 0.6, 2.5]

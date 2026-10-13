@@ -18,7 +18,7 @@ and `run()` are complete. Checked by `tests/test_online.py`.
 - The state order is `[x1, x2, xi_x1, xi_x2, xi_u1, xi_u2, m_hat, b_hat, k_hat]`.
 - `plant.excitation(t)` is the input `u`. The deck calls it `f`.
 - The filter output `w = H xi + [0; G] signal` holds the signal passed through
-  `1/Lambda`, `s/Lambda` and `s^2/Lambda`. Work out which entry is which before you build
+  `1/Lambda`, `s/Lambda` and `s^2/Lambda`. Determine which entry is which before building
   `phi` and `z`, and order `phi` to match `[m, b, k]`.
 - The plant states `x1` and `x2` are only for simulating the plant. The estimator part
   may use `x1` and `u` only.

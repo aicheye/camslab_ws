@@ -1,8 +1,13 @@
 # Install
 
-camslab needs Ubuntu 22.04 and ROS 2 Humble.
+Requires Ubuntu 22.04 and ROS 2 Humble.
 
-1. Install ROS 2 Humble Desktop by following the [ROS 2 install guide](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html).
+Choose one setup below. Use the host install for development. Use Docker to keep the ROS
+and Gazebo dependencies inside a container.
+
+## Host install
+
+1. Install ROS 2 Humble Desktop using the [ROS 2 install guide](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html).
 2. Install the build tools:
 
    ```bash
@@ -11,8 +16,8 @@ camslab needs Ubuntu 22.04 and ROS 2 Humble.
    rosdep update
    ```
 
-   If `rosdep init` says it is already initialized, carry on.
-3. Download the code and its dependencies (Gazebo, RViz and the rest):
+   Ignore the `rosdep init` error when it reports that rosdep is already initialized.
+3. Clone the repository and install its dependencies:
 
    ```bash
    cd ~
@@ -28,8 +33,38 @@ camslab needs Ubuntu 22.04 and ROS 2 Humble.
    colcon build --symlink-install
    ```
 
-Run `git pull` and step 4 again whenever the code changes.
+After pulling changes, repeat step 4.
 
 ```{tip}
-Add `source /opt/ros/humble/setup.bash` to the end of `~/.bashrc` so every new terminal has ROS.
+Add `source /opt/ros/humble/setup.bash` to `~/.bashrc` to source ROS automatically in new terminals.
 ```
+
+Verify the build before launching:
+
+```bash
+source install/setup.bash
+ros2 pkg prefix camslab
+```
+
+Confirm that the command prints a path containing `install/camslab`. If it does not,
+rebuild from the repository root and source `install/setup.bash` again.
+
+## Docker
+
+Install Docker and grant the current user permission to run it. From the repository root:
+
+```bash
+docker compose -f docker/compose.yaml build
+docker compose -f docker/compose.yaml run --rm ros
+```
+
+Inside the container, build and source the workspace once:
+
+```bash
+colcon build --symlink-install
+source install/setup.bash
+```
+
+Keep that shell open while running the simulator ({doc}`running`). Repeat the build after
+changing a `package.xml`, `CMakeLists.txt`, or Python package dependency. Rebuild the
+image after changing the Dockerfile or adding a system dependency.
