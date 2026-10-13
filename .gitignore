@@ -5,3 +5,6 @@ __pycache__/
 build/
 install/
 log/
+# Safety polytope of the local lab setup, saved by the web UI.
+camslab/config/polytope.yaml
+docs/_build/

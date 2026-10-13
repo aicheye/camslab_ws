@@ -1,0 +1,30 @@
+# Gazebo settings for gazebo_multi.launch.py. Pass another file with config:=/path/to/file.yaml.
+# A launch argument with the same name overrides a top-level value: gui:=true.
+# The trajectory, gains and limits are in params.yaml; `controller` adds to them.
+
+gui: false            # also open the Gazebo window
+rviz: true            # RViz, the main view
+webui: true           # web UI on `port`
+port: 8000
+start_enabled: true   # controllers drive as soon as they have a pose
+
+# Controller parameters for the Gazebo R2, on top of params.yaml.
+controller:
+  kappa_max: 2.9      # tan(0.6) / 0.235, the R2's steering limit [1/m]
+
+# name     robot name: its namespace (/<name>/pose), Gazebo model, and TF prefix
+#          (<name>/base_link). Lowercase letters, digits, and _; starts with a letter.
+# x, y     spawn position [m]
+# yaw      spawn heading [rad], default 0
+# color    RViz body colour, default green. A name (green, red, blue, orange, purple)
+#          or [r, g, b] / [r, g, b, a] in [0, 1].
+#          Gazebo keeps the model.sdf colour.
+#
+# The first robot in the list is the one the web UI plots by default.
+robots:
+  - {name: angostura, x: 1.5, y: 0.5, color: green}
+  # All robots track the same p*(t), so more than one robot collides until each gets
+  # its own reference.
+  # - {name: bodies, x: 0.9, y: 0.5, color: blue}
+  # - {name: cologne, x: 0.3, y: 0.5, color: orange}
+  # - {name: estranged, x: 0.3, y: 1.5, color: purple}
