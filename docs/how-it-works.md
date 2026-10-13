@@ -1,5 +1,22 @@
 # How it works
 
+## System overview
+
+```text
+Gazebo / mocap
+      │ pose
+      ▼
+  controller ───────────────► cmd_vel ───────────────► robot
+      │
+      ├── ref_path ──────────► RViz and web UI
+      ├── ref_pose ──────────► RViz and web UI
+      └── safety_polytope ───► RViz and web UI
+```
+
+The offline simulator uses the same reference and control concepts without ROS or
+Gazebo. The web UI changes parameters and displays the resulting run; it does not replace
+the controller's safety checks.
+
 ## Car model
 
 The controller tracks the centre of the rear axle, which follows unicycle kinematics:

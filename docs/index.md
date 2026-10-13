@@ -13,6 +13,8 @@ Choose **host install** on Ubuntu 22.04 with ROS 2 already installed. Choose
 | Run the existing Docker environment | {doc}`install` → Docker |
 | Start the simulator after installation | {doc}`running` |
 | Change a path or draw one | {doc}`paths` |
+| Configure trajectories and robots | {doc}`configuration` |
+| Read ROS and package details | {doc}`developer` |
 | Fix a launch problem | {doc}`troubleshooting` |
 
 ```{tip}
@@ -32,8 +34,10 @@ install
 running
 paths
 safety-area
+configuration
 your-controller
 custom-node
+developer
 troubleshooting
 how-it-works
 ```
