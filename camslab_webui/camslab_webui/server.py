@@ -31,14 +31,16 @@ class Backend:
         raise NotImplementedError
 
 
-def hello_msg(backend, mode, can_set_pose, robot_name=""):
+def hello_msg(backend, mode, can_set_pose, robot_name="", can_set_polytope=False):
     """mode is "batch" (whole run sent at once) or "live" (streamed). robot_name labels
-    the robot in "samples" on the map; empty draws no label."""
+    the robot in "samples" on the map; empty draws no label. can_set_polytope shows the
+    safety polytope editor."""
     return {
         "type": "hello",
         "backend": backend,
         "mode": mode,
         "can_set_pose": can_set_pose,
+        "can_set_polytope": can_set_polytope,
         "robot_name": robot_name,
         "fields": SAMPLE_FIELDS,
     }

@@ -17,8 +17,10 @@ const PARAM_LABELS = {
   theta0: 'θ0 [rad]',
   circle_speed: 'circle speed [m/s]',
   kappa: 'circle κ [1/m]',
-  a: 'gerono a [m]',
-  period: 'gerono period [s]',
+  a: 'gerono / ellipse / rectangle a [m]',
+  b: 'ellipse / rectangle b [m]',
+  period: 'gerono / ellipse / rectangle / spline period [s]',
+  phi0: 'gerono / ellipse φ0 [rad]',
   k_par: 'k∥ [1/s]',
   k_perp: 'k⊥ [1/m²]',
   k_q: 'k_q [1/s]',
@@ -46,7 +48,19 @@ const state = {
   path: [],       // [[x, y], ...], p*(t) sampled over the run
   initial: null,  // {x, y, theta}
   params: {},
+  polytope: { points: [], margin: 0.2, file: '' },  // as the controllers have it
 };
+
+// Corners being edited, [[x, y], ...] in click order, or null when not editing.
+let polyDraft = null;
+const POLY_SNAP = 0.05;  // clicked corners are rounded to this [m]
+
+// Spline control points being edited, [[x, y], ...] in path order, or null when not
+// editing. splineHistory holds earlier drafts for Undo.
+let splineDraft = null;
+let splineHistory = [];
+const SPLINE_MIN_POINTS = 4;
+const PICK_RADIUS = 10;  // a press this close to a control point grabs it [px]
 
 const $ = (id) => document.getElementById(id);
 const world = $('world');
@@ -126,10 +140,12 @@ function onMessage(msg) {
     $('stop').disabled = msg.mode === 'batch';
     $('initial-set').disabled = !msg.can_set_pose;
     $('initial-set').hidden = !msg.can_set_pose;
+    $('polytope-set').hidden = !msg.can_set_polytope;
   } else if (msg.type === 'config') {
     if (msg.params) Object.assign(state.params, msg.params);
     if (msg.path) state.path = msg.path;
     if (msg.initial) state.initial = msg.initial;
+    if (msg.polytope) state.polytope = msg.polytope;
     syncInputs();
   } else if (msg.type === 'samples') {
     onSamples(msg);
@@ -266,6 +282,7 @@ function setValue(input, value) {
 $('shape').addEventListener('change', (ev) => {
   state.params.shape = ev.target.value;
   send({ type: 'set_params', params: { shape: ev.target.value } });
+  syncSpline();
 });
 
 // Random position, heading and size of the selected shape, inside the 0 to 6 m area and
@@ -273,6 +290,8 @@ $('shape').addEventListener('change', (ev) => {
 $('traj-random').addEventListener('click', () => send({ type: 'randomize_trajectory' }));
 
 function syncInputs() {
+  syncPolytope();
+  syncSpline();
   if (typeof state.params.shape === 'string') setValue($('shape'), state.params.shape);
   if (state.initial) {
     setValue($('init-x'), state.initial.x);
@@ -308,6 +327,199 @@ function syncInputs() {
   }
 }
 
+// ----------------------------------------------------------- safety polytope
+
+// Counter-clockwise convex hull of [[x, y], ...] (Andrew's monotone chain), the same as
+// convex_hull() in polytope.py, which the bridge applies. Shows the area before Apply.
+function convexHull(points) {
+  const pts = [...new Map(points.map((p) => [p.join(','), p])).values()]
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  if (pts.length < 3) return pts;
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const half = (list) => {
+    const out = [];
+    for (const p of list) {
+      while (out.length >= 2 && cross(out[out.length - 2], out[out.length - 1], p) <= 0) out.pop();
+      out.push(p);
+    }
+    out.pop();
+    return out;
+  };
+  return [...half(pts), ...half([...pts].reverse())];
+}
+
+function polygonArea(poly) {
+  let a = 0;
+  poly.forEach(([x, y], i) => {
+    const [x1, y1] = poly[(i + 1) % poly.length];
+    a += x * y1 - x1 * y;
+  });
+  return a / 2;
+}
+
+function setEditing(on) {
+  if (on && splineDraft) setSplineEditing(false);
+  polyDraft = on ? state.polytope.points.map((p) => [...p]) : null;
+  $('poly-edit').checked = on;
+  syncPolytope();
+}
+
+function addCorner(x, y) {
+  if (!polyDraft) setEditing(true);
+  polyDraft.push([x, y]);
+  syncPolytope();
+}
+
+function syncPolytope() {
+  setValue($('poly-margin'), state.polytope.margin);
+  const applied = state.polytope.points;
+  let text;
+  if (polyDraft) {
+    const hull = convexHull(polyDraft);
+    const same = JSON.stringify(hull.map((p) => p.map((c) => c.toFixed(3))))
+      === JSON.stringify(applied.map((p) => p.map((c) => c.toFixed(3))));
+    text = `Editing: ${polyDraft.length} corners. Click the map or press Add robot position to add one.`;
+    if (hull.length >= 3) text += ` Area ${polygonArea(hull).toFixed(2)} m².`;
+    if (polyDraft.length > hull.length) text += ' Corners inside the outline are left out.';
+    text += same ? ' Applied.' : ' Not applied yet.';
+  } else if (applied.length >= 3) {
+    text = `${applied.length} corners, ${polygonArea(applied).toFixed(2)} m², `
+      + (state.polytope.file ? `saved in ${state.polytope.file}.` : 'not saved.');
+  } else {
+    text = 'None: the controllers do not check the safe area. Tick edit to draw one.';
+  }
+  $('poly-info').textContent = text;
+  dirty = true;
+}
+
+$('poly-edit').addEventListener('change', (ev) => setEditing(ev.target.checked));
+$('poly-add-robot').addEventListener('click', () => {
+  const rows = selRows();
+  if (rows.length === 0) return;
+  const s = rows[rows.length - 1];
+  addCorner(s[X], s[Y]);
+});
+$('poly-undo').addEventListener('click', () => {
+  if (polyDraft && polyDraft.length > 0) polyDraft.pop();
+  syncPolytope();
+});
+$('poly-clear').addEventListener('click', () => {
+  if (!polyDraft) setEditing(true);
+  polyDraft.length = 0;
+  syncPolytope();
+});
+$('poly-margin').addEventListener('change', () => {
+  const v = parseFloat($('poly-margin').value);
+  if (Number.isFinite(v) && v >= 0) state.polytope.margin = v;
+});
+// Applies the draft, or the current corners with a new margin when not editing. Editing
+// stays on, so a rejected polytope can be fixed and applied again.
+$('poly-apply').addEventListener('click', () => {
+  const points = polyDraft ? convexHull(polyDraft) : state.polytope.points;
+  send({ type: 'set_polytope', points, margin: state.polytope.margin });
+});
+
+// ------------------------------------------------------- spline control points
+
+// Applied control points as [[x, y], ...], from the flat control_points parameter.
+function splinePoints() {
+  const xy = state.params.control_points;
+  if (!Array.isArray(xy)) return [];
+  const points = [];
+  for (let i = 0; i + 1 < xy.length; i += 2) points.push([xy[i], xy[i + 1]]);
+  return points;
+}
+
+function setSplineEditing(on) {
+  if (on && polyDraft) setEditing(false);
+  splineDraft = on ? splinePoints() : null;
+  splineHistory = [];
+  $('spline-edit').checked = on;
+  syncSpline();
+}
+
+// Saves the draft for Undo, then changes it with edit(draft).
+function editSpline(edit) {
+  splineHistory.push(splineDraft.map((p) => [...p]));
+  edit(splineDraft);
+  syncSpline();
+}
+
+// Distance from (x, y) to the segment from a to b [m].
+function segmentDistance(x, y, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1];
+  const len2 = dx * dx + dy * dy;
+  const s = len2 > 0 ? Math.min(1, Math.max(0, ((x - a[0]) * dx + (y - a[1]) * dy) / len2)) : 0;
+  return Math.hypot(x - a[0] - s * dx, y - a[1] - s * dy);
+}
+
+// Adds (x, y) into the edge of the closed control polygon nearest to it, so a click
+// between two points goes between them in path order. With fewer than 3 points it goes last.
+function addSplinePoint(x, y) {
+  editSpline((pts) => {
+    let at = pts.length, best = Infinity;
+    if (pts.length >= 3) {
+      pts.forEach((a, i) => {
+        const d = segmentDistance(x, y, a, pts[(i + 1) % pts.length]);
+        if (d < best) { best = d; at = i + 1; }
+      });
+    }
+    pts.splice(at, 0, [x, y]);
+  });
+}
+
+// Index of the draft point within PICK_RADIUS pixels of (px, py), or -1.
+function pickSplinePoint(px, py) {
+  if (!splineDraft || !view) return -1;
+  let best = -1, bestD = PICK_RADIUS * PICK_RADIUS;
+  splineDraft.forEach(([x, y], i) => {
+    const d = (view.sx(x) - px) ** 2 + (view.sy(y) - py) ** 2;
+    if (d <= bestD) { bestD = d; best = i; }
+  });
+  return best;
+}
+
+function syncSpline() {
+  const isSpline = state.params.shape === 'spline';
+  $('spline-set').hidden = !isSpline;
+  if (!isSpline && splineDraft) {
+    splineDraft = null;
+    $('spline-edit').checked = false;
+  }
+  const applied = splinePoints();
+  let text;
+  if (splineDraft) {
+    const same = JSON.stringify(splineDraft) === JSON.stringify(applied);
+    text = `Editing: ${splineDraft.length} points. Click the map to add one, drag one to move it, `
+      + 'shift-click one to remove it.';
+    if (splineDraft.length < SPLINE_MIN_POINTS) text += ` The spline needs at least ${SPLINE_MIN_POINTS}.`;
+    text += same ? ' Applied.' : ' Not applied yet.';
+  } else {
+    text = `${applied.length} points. Tick edit to change them, or press Random.`;
+  }
+  $('spline-info').textContent = text;
+  dirty = true;
+}
+
+$('spline-edit').addEventListener('change', (ev) => setSplineEditing(ev.target.checked));
+$('spline-undo').addEventListener('click', () => {
+  if (splineDraft && splineHistory.length > 0) splineDraft = splineHistory.pop();
+  syncSpline();
+});
+$('spline-clear').addEventListener('click', () => {
+  if (!splineDraft) setSplineEditing(true);
+  editSpline((pts) => { pts.length = 0; });
+});
+// Sends the draft. Editing stays on, so a rejected spline can be fixed and applied again.
+$('spline-apply').addEventListener('click', () => {
+  if (!splineDraft) return;
+  if (splineDraft.length < SPLINE_MIN_POINTS) {
+    $('spline-info').textContent = `Not applied: the spline needs at least ${SPLINE_MIN_POINTS} points.`;
+    return;
+  }
+  send({ type: 'set_params', params: { control_points: splineDraft.flat() } });
+});
+
 $('csv').addEventListener('click', () => {
   const lines = [FIELDS.join(',')];
   for (const row of selRows()) lines.push(row.join(','));
@@ -324,7 +536,7 @@ $('csv').addEventListener('click', () => {
 function readColors() {
   const css = getComputedStyle(document.documentElement);
   for (const name of ['surface', 'border', 'grid', 'text-primary', 'text-secondary',
-    'text-muted', 'series-1', 'series-2', 'series-3', 'series-4', 'series-5']) {
+    'text-muted', 'series-1', 'series-2', 'series-3', 'series-4', 'series-5', 'critical']) {
     colors[name] = css.getPropertyValue('--' + name).trim();
   }
   dirty = true;
@@ -459,19 +671,89 @@ function drawGrid(ctx, w, h) {
   ctx.fillText('y_g', ox + 4, oy - len - 4);
 }
 
-// Reference path p*(t), dashed.
+// Reference path p*(t), solid. The path covers [0, t_max], often more than one lap, and
+// dashes on overlapping laps would fall out of step and look uneven.
 function drawPath(ctx) {
   if (state.path.length < 2) return;
   ctx.strokeStyle = colors['series-2'];
   ctx.lineWidth = 1.5;
-  ctx.setLineDash([6, 4]);
+  ctx.lineJoin = 'round';
   ctx.beginPath();
   state.path.forEach(([x, y], i) => {
     if (i === 0) ctx.moveTo(view.sx(x), view.sy(y));
     else ctx.lineTo(view.sx(x), view.sy(y));
   });
   ctx.stroke();
+}
+
+// Safety polytope: the applied one solid, the one being edited dashed with its corners.
+function drawPolytope(ctx) {
+  const outline = (poly) => {
+    ctx.beginPath();
+    poly.forEach(([x, y], i) => {
+      if (i === 0) ctx.moveTo(view.sx(x), view.sy(y));
+      else ctx.lineTo(view.sx(x), view.sy(y));
+    });
+    ctx.closePath();
+  };
+  ctx.strokeStyle = colors.critical;
+  ctx.fillStyle = colors.critical;
+  const applied = state.polytope.points;
+  if (applied.length >= 3) {
+    outline(applied);
+    ctx.globalAlpha = 0.06;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+  if (!polyDraft) return;
+  const hull = convexHull(polyDraft);
+  if (hull.length >= 2) {
+    outline(hull);
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 4]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  polyDraft.forEach(([x, y], i) => {
+    ctx.beginPath();
+    ctx.arc(view.sx(x), view.sy(y), 4, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.fillText(String(i + 1), view.sx(x) + 6, view.sy(y) - 6);
+  });
+}
+
+// Spline control polygon, dashed: the applied one faint, the one being edited with its
+// numbered points.
+function drawSpline(ctx) {
+  if (state.params.shape !== 'spline') return;
+  const pts = splineDraft || splinePoints();
+  if (pts.length === 0) return;
+  ctx.strokeStyle = colors['series-2'];
+  ctx.fillStyle = colors['series-2'];
+  ctx.globalAlpha = splineDraft ? 1 : 0.4;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 4]);
+  ctx.beginPath();
+  pts.forEach(([x, y], i) => {
+    if (i === 0) ctx.moveTo(view.sx(x), view.sy(y));
+    else ctx.lineTo(view.sx(x), view.sy(y));
+  });
+  ctx.closePath();
+  ctx.stroke();
   ctx.setLineDash([]);
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  pts.forEach(([x, y], i) => {
+    ctx.beginPath();
+    ctx.arc(view.sx(x), view.sy(y), splineDraft ? 5 : 3, 0, 2 * Math.PI);
+    ctx.fill();
+    if (splineDraft) ctx.fillText(String(i), view.sx(x) + 7, view.sy(y) - 7);
+  });
+  ctx.globalAlpha = 1;
 }
 
 // Cross at the reference p* of a sample row, labelled p* or p*<name>.
@@ -562,6 +844,8 @@ function drawWorld() {
   const { ctx, w, h } = fitCanvas(world);
   view = computeView(w, h);
   drawGrid(ctx, w, h);
+  drawPolytope(ctx);
+  drawSpline(ctx);
   drawPath(ctx);
   const n = state.samples.length;
   if (state.initial && state.canSetPose) {
@@ -587,17 +871,34 @@ function drawWorld() {
   if (n > 0 && state.cursor >= 0) drawReference(ctx, state.samples[state.cursor], colors['series-2'], 'p*');
 }
 
-// A drag longer than 4 px pans the view.
+// A drag longer than 4 px pans the view. While editing the spline, a drag that starts on
+// a control point moves that point instead (drag.point is its index).
 let drag = null;
+const snap = (v) => +(Math.round(v / POLY_SNAP) * POLY_SNAP).toFixed(3);
 
 world.addEventListener('pointerdown', (ev) => {
   if (!view || ev.button !== 0) return;
-  drag = { x: ev.clientX, y: ev.clientY, cx: camera.cx, cy: camera.cy, panning: false };
+  const rect = world.getBoundingClientRect();
+  const point = pickSplinePoint(ev.clientX - rect.left, ev.clientY - rect.top);
+  if (point >= 0 && ev.shiftKey) {
+    editSpline((pts) => pts.splice(point, 1));
+    return;
+  }
+  drag = { x: ev.clientX, y: ev.clientY, cx: camera.cx, cy: camera.cy, panning: false,
+    point: point >= 0 ? point : null };
   world.setPointerCapture(ev.pointerId);
 });
 
+// A click without a pan adds a safety polytope corner or a spline point while editing.
 world.addEventListener('pointerup', (ev) => {
   if (!drag) return;
+  if (drag.point === null && !drag.panning) {
+    const rect = world.getBoundingClientRect();
+    const x = snap(view.wx(ev.clientX - rect.left)), y = snap(view.wy(ev.clientY - rect.top));
+    if (polyDraft) addCorner(x, y);
+    else if (splineDraft) addSplinePoint(x, y);
+  }
+  if (drag.point !== null) syncSpline();
   drag = null;
   world.style.cursor = '';
 });
@@ -628,6 +929,17 @@ $('view-reset').addEventListener('click', () => {
 
 world.addEventListener('pointermove', (ev) => {
   if (!view) return;
+  if (drag && drag.point !== null) {
+    if (!drag.panning) {  // first move: save the draft for Undo
+      splineHistory.push(splineDraft.map((p) => [...p]));
+      drag.panning = true;
+    }
+    const rect = world.getBoundingClientRect();
+    splineDraft[drag.point] = [snap(view.wx(ev.clientX - rect.left)), snap(view.wy(ev.clientY - rect.top))];
+    world.style.cursor = 'grabbing';
+    dirty = true;
+    return;
+  }
   if (drag) {
     const dx = ev.clientX - drag.x, dy = ev.clientY - drag.y;
     if (!drag.panning && Math.hypot(dx, dy) < 4) return;

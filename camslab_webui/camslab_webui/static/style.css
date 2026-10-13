@@ -134,6 +134,7 @@ legend { font-size: 12px; color: var(--text-secondary); padding: 0 4px; }
 label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 13px; }
 input[type="number"] { width: 84px; padding: 3px 6px; font-variant-numeric: tabular-nums; }
 .params { display: flex; flex-wrap: wrap; gap: 10px; }
+.poly-info { flex-basis: 100%; }
 
 .plots figure { margin: 0 0 10px; }
 .plots figcaption { font-size: 12px; font-weight: 600; margin-bottom: 2px; }

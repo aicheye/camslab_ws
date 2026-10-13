@@ -2,11 +2,16 @@
 
 ROS 2 Humble with Gazebo Fortress, in docker/ or installed on the host (README.md).
 
-    ros2 launch camslab gazebo_multi.launch.py                       # config/fleet.yaml
-    ros2 launch camslab gazebo_multi.launch.py fleet:=/path/to/other.yaml
+    ros2 launch camslab gazebo_multi.launch.py                       # config/sim.yaml
+    ros2 launch camslab gazebo_multi.launch.py gui:=true
+    ros2 launch camslab gazebo_multi.launch.py config:=/path/to/other.yaml
 
-The fleet file lists the robots. Every robot's controller tracks the trajectory set
-in config/params.yaml (shape, x0, y0, theta0, ...).
+config/sim.yaml lists the robots and the launch options (gui, rviz, webui, port,
+start_enabled); a launch argument with the same name overrides a value in it. Every
+robot's controller tracks the trajectory set in config/params.yaml (shape, x0, y0,
+theta0, ...), with sim.yaml `controller` on top. When config/polytope.yaml exists (the
+web UI saves it, see the `polytope` argument), every controller also keeps its reference
+path and its robot inside that safety polytope, and RViz draws it in red.
 
 This file starts the Gazebo world, the web UI, and RViz, and includes robot.launch.py
 once per robot with name:=<name>.
@@ -14,13 +19,14 @@ once per robot with name:=<name>.
 RViz is the main view: it shows each robot, its ref_path, and its current ref_pose p*.
 The controllers start enabled, so each robot drives as soon as it has a pose.
 
-/webui_bridge (root namespace, webui:=false to skip) plots the first robot in the fleet
+/webui_bridge (root namespace, webui: false to skip) plots the first robot in the fleet
 file and draws every robot. Its Start and Stop enable and disable every controller, which
 also restarts the trajectory clock, and Reset stops the controllers and clears the plots.
 """
 
 import os
 import re
+import sys
 import tempfile
 
 import yaml
@@ -32,6 +38,9 @@ from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription, Opa
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node, SetParameter
+
+sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
+import camslab_settings  # noqa: E402
 
 # Names a fleet file's `color` can use in place of [r, g, b].
 COLORS = {
@@ -51,10 +60,8 @@ def ign_partition():
         default_value=["camslab_", EnvironmentVariable("ROS_DOMAIN_ID", default_value="0")]))
 
 
-def load_fleet(path):
-    """Read and check the `robots` list of a fleet file."""
-    with open(path) as f:
-        fleet = yaml.safe_load(f)["robots"]
+def check_fleet(fleet, path):
+    """Check the `robots` list of a settings file."""
     names = [r["name"] for r in fleet]
     for name in names:
         # Valid as a ROS namespace, a Gazebo model name, and a TF prefix.
@@ -85,10 +92,22 @@ def rgba(robot):
 
 
 def rviz_config(share, fleet):
-    """Path of an RViz config: rviz/fleet.rviz plus, per robot, a RobotModel display and
-    its ref_path and ref_pose."""
+    """Path of an RViz config: rviz/fleet.rviz plus the first robot's safety_polytope and,
+    per robot, a RobotModel display and its ref_path and ref_pose. Every controller has the
+    same polytope, so one display draws it."""
     with open(os.path.join(share, "rviz", "fleet.rviz")) as f:
         config = yaml.safe_load(f)
+    config["Visualization Manager"]["Displays"].append({
+        "Class": "rviz_default_plugins/Polygon",
+        "Name": "safety_polytope",
+        "Enabled": True,
+        "Topic": {"Value": f"/{fleet[0]['name']}/safety_polytope", "Depth": 1,
+                  "Durability Policy": "Transient Local", "History Policy": "Keep Last",
+                  "Reliability Policy": "Reliable"},
+        "Color": "220; 40; 40",
+        "Alpha": 1,
+        "Value": True,
+    })
     for robot in fleet:
         ns = robot["name"]
         config["Visualization Manager"]["Displays"].append({
@@ -141,9 +160,13 @@ def robots(context):
     world = os.path.join(share, "worlds", "camslab.sdf")
     gui_config = os.path.join(share, "worlds", "gui.config")
 
-    fleet = load_fleet(LaunchConfiguration("fleet").perform(context))
-    gui = LaunchConfiguration("gui").perform(context).lower() == "true"
-    port = int(LaunchConfiguration("port").perform(context))
+    settings = camslab_settings.load(context)
+    fleet = check_fleet(settings["robots"], LaunchConfiguration("config").perform(context))
+    gui = bool(settings["gui"])
+    port = int(settings["port"])
+    start_enabled = bool(settings["start_enabled"])
+    polytope = LaunchConfiguration("polytope").perform(context)
+    controller = camslab_settings.controller_file(settings)
 
     gz_args = f"-r -s {world}" if not gui else f"-r --gui-config {gui_config} {world}"
     actions = [IncludeLaunchDescription(
@@ -162,18 +185,22 @@ def robots(context):
             PythonLaunchDescriptionSource(robot_launch),
             launch_arguments={"name": robot["name"], "x": str(robot["x"]),
                               "y": str(robot["y"]), "yaw": str(robot.get("yaw", 0.0)),
-                              "color": rgba(robot)}.items()))
+                              "color": rgba(robot),
+                              "controller": controller,
+                              "polytope": polytope,
+                              "start_enabled": str(start_enabled).lower(),
+                              }.items()))
 
-    if LaunchConfiguration("rviz").perform(context).lower() == "true":
+    if settings["rviz"]:
         actions.append(Node(package="rviz2", executable="rviz2", output="log",
                             arguments=["-d", rviz_config(share, fleet)]))
 
-    if LaunchConfiguration("webui").perform(context).lower() != "true":
+    if not settings["webui"]:
         return actions
     first, others = fleet[0]["name"], [r["name"] for r in fleet[1:]]
     label = f"Gazebo, {first}" if not others else f"Gazebo fleet of {len(fleet)}"
-    bridge_params = {"backend_label": label, "port": port, "start_enabled": True,
-                     "robot_name": first}
+    bridge_params = {"backend_label": label, "port": port, "start_enabled": start_enabled,
+                     "robot_name": first, "polytope_file": polytope}
     if others:
         bridge_params["others"] = others
     # Root namespace. Plots the first robot and streams the others as "fleet" messages.
@@ -185,14 +212,11 @@ def robots(context):
 def generate_launch_description():
     share = get_package_share_directory("camslab")
     return LaunchDescription([
-        DeclareLaunchArgument("fleet", default_value=os.path.join(share, "config", "fleet.yaml"),
-                              description="YAML file with the robot list"),
-        DeclareLaunchArgument("gui", default_value="false",
-                              description="true also opens the Gazebo window"),
-        DeclareLaunchArgument("port", default_value="8000", description="web UI port"),
-        DeclareLaunchArgument("rviz", default_value="true", description="start RViz"),
-        DeclareLaunchArgument("webui", default_value="true",
-                              description="start the web UI (optional)"),
+        *camslab_settings.arguments(os.path.join(share, "config", "sim.yaml")),
+        DeclareLaunchArgument("polytope",
+                              default_value=camslab_settings.default_polytope_file(__file__),
+                              description="safety polytope file: loaded when it exists, and "
+                              "where the web UI saves it; empty for none"),
         ign_partition(),
         SetEnvironmentVariable("IGN_GAZEBO_RESOURCE_PATH", [
             EnvironmentVariable("IGN_GAZEBO_RESOURCE_PATH", default_value=""), ":",

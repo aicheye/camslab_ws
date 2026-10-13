@@ -8,7 +8,9 @@ runs in namespace <name>:
   Gazebo model <name>, spawned into the world `camslab`
   parameter_bridge   /model/<name>/pose -> pose,  cmd_vel -> /model/<name>/cmd_vel,
                      /world/<world>/model/<name>/joint_state -> joint_states
-  controller         pose -> cmd_vel, ref_pose, ref_path
+  controller         pose -> cmd_vel, ref_pose, ref_path, safety_polytope; parameters from
+                     `params`, then `controller` (robot-specific values, such as kappa_max)
+                     and, when the file exists, the safety polytope file `polytope`
   robot_state_publisher   r2.urdf.xacro (body colour `color`) + joint_states -> TF
                           <name>/<link>, at most 50 Hz (Gazebo sends joint_states every
                           1 ms physics step)
@@ -22,7 +24,8 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, SetEnvironmentVariable
+from launch.actions import (DeclareLaunchArgument, GroupAction, OpaqueFunction,
+                            SetEnvironmentVariable)
 from launch.substitutions import Command, EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node, PushRosNamespace, SetParameter
 from launch_ros.parameter_descriptions import ParameterValue
@@ -32,6 +35,29 @@ def ign_partition():
     return SetEnvironmentVariable("IGN_PARTITION", EnvironmentVariable(
         "IGN_PARTITION",
         default_value=["camslab_", EnvironmentVariable("ROS_DOMAIN_ID", default_value="0")]))
+
+
+def default_polytope_file():
+    """config/polytope.yaml in the source tree, where the web UI saves the safety polytope.
+    Under colcon --symlink-install this launch file links into the source tree, so the file
+    is found without a rebuild; otherwise it is the installed config directory."""
+    launch_dir = os.path.dirname(os.path.realpath(__file__))
+    return os.path.normpath(os.path.join(launch_dir, "..", "config", "polytope.yaml"))
+
+
+def controller(context):
+    """The controller node, with the `controller` file and then the polytope file after
+    params.yaml when they exist."""
+    files = [LaunchConfiguration("params").perform(context)]
+    overrides = LaunchConfiguration("controller").perform(context)
+    if overrides:
+        files.append(overrides)
+    polytope = LaunchConfiguration("polytope").perform(context)
+    if polytope and os.path.isfile(polytope):
+        files.append(polytope)
+    start_enabled = LaunchConfiguration("start_enabled").perform(context).lower() == "true"
+    return [Node(package="camslab", executable="controller", output="screen",
+                 parameters=files + [{"start_enabled": start_enabled}])]
 
 
 def generate_launch_description():
@@ -49,6 +75,12 @@ def generate_launch_description():
         DeclareLaunchArgument("yaw", default_value="0.0", description="spawn heading [rad]"),
         DeclareLaunchArgument("params", default_value=os.path.join(share, "config", "params.yaml"),
                               description="controller parameter file"),
+        DeclareLaunchArgument("controller", default_value="",
+                              description="controller parameter file loaded after `params`; "
+                              "empty for none"),
+        DeclareLaunchArgument("polytope", default_value=default_polytope_file(),
+                              description="safety polytope file saved by the web UI; loaded "
+                              "when it exists"),
         DeclareLaunchArgument("color", default_value="0 0.63 0.24 1",
                               description="RViz body colour \"r g b a\" in [0, 1]"),
         DeclareLaunchArgument("world", default_value="camslab", description="Gazebo world name"),
@@ -76,10 +108,7 @@ def generate_launch_description():
                              (["/model/", name, "/cmd_vel"], "cmd_vel"),
                              (["/world/", world, "/model/", name, "/joint_state"],
                               "joint_states")]),
-            Node(package="camslab", executable="controller", output="screen",
-                 parameters=[LaunchConfiguration("params"),
-                             {"start_enabled": ParameterValue(
-                                 LaunchConfiguration("start_enabled"), value_type=bool)}]),
+            OpaqueFunction(function=controller),
             Node(package="robot_state_publisher", executable="robot_state_publisher",
                  parameters=[{"robot_description": robot_description,
                               "frame_prefix": [name, "/"], "publish_frequency": 50.0}]),

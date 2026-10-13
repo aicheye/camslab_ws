@@ -13,10 +13,10 @@ find_package(tf2_ros REQUIRED)
 find_package(nav_msgs REQUIRED)
 
 # Control law and reference trajectories, without ROS dependencies.
-add_library(camslab_core STATIC src/controller.cpp src/trajectory.cpp)
+add_library(camslab_core STATIC src/controller.cpp src/polytope.cpp src/trajectory.cpp)
 target_include_directories(camslab_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
-target_compile_features(camslab_core PUBLIC cxx_std_17)
+target_compile_features(camslab_core PUBLIC cxx_std_20)
 
 add_executable(controller src/controller_node.cpp)
 target_link_libraries(controller camslab_core)

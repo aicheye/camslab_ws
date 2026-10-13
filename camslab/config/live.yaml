@@ -1,0 +1,24 @@
+# Real robot settings for live.launch.py: a DJI RoboMaster S1 with its pose from the lab
+# mocap. Pass another file with config:=/path/to/file.yaml.
+# A launch argument with the same name overrides a top-level value: conn_type:=ap.
+# The trajectory, gains and limits are in params.yaml; `controller` adds to them.
+
+# Robot, through robomaster_ros s1.launch.
+name: angostura                  # ROS namespace and TF prefix
+serial_number: 3JKDH6U001689X    # on the S1 intelligent controller
+conn_type: sta                   # sta (lab router), ap (the robot's Wi-Fi) or rndis (USB)
+chassis_timeout: 0.5             # the S1 stops when cmd_vel is older than this [s]
+
+# Pose, through vrpn_mocap. The rigid body is streamed with Z up.
+mocap_server: 129.97.71.49
+mocap_port: 3883
+tracker: ""                      # rigid body name in the mocap software; empty for `name`
+
+rviz: true
+webui: true                      # web UI on `port`
+port: 8000
+start_enabled: false             # true drives as soon as a mocap pose arrives
+
+# Controller parameters for the S1, on top of params.yaml.
+controller:
+  kappa_max: 2.9                 # [1/m]; the S1 turns in place, so this limit is the R2's

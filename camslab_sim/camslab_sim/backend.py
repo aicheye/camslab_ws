@@ -53,6 +53,10 @@ class SimBackend(Backend):
                     if value not in SHAPES:
                         raise ValueError(f"shape must be one of {SHAPES}, got {value!r}")
                     self.params.shape = value
+                elif key == "control_points":
+                    points = tuple(float(v) for v in value)
+                    make_shape(dataclasses.replace(self.params, control_points=points))
+                    self.params.control_points = points
                 elif key in ("dt", "t_max"):
                     setattr(self, key, float(value))
                 elif hasattr(self.params, key):
@@ -78,8 +82,10 @@ class SimBackend(Backend):
         """Replace the trajectory parameters with a random set for the current shape that
         passes check_limits() over [0, t_max] and whose path stays inside the area."""
         for _ in range(RANDOM_TRIES):
-            candidate = dataclasses.replace(
-                self.params, **random_params(self.params.shape, self.params.to_dict()))
+            picked = random_params(self.params.shape, self.params.to_dict())
+            if "control_points" in picked:
+                picked["control_points"] = tuple(picked["control_points"])
+            candidate = dataclasses.replace(self.params, **picked)
             shape = make_shape(candidate)
             try:
                 check_limits(shape, candidate, self.t_max)
@@ -100,6 +106,13 @@ class SimBackend(Backend):
         await self.server.broadcast(self._config())
         initial = State.from_pose(**self.initial)
         loop = asyncio.get_running_loop()
+        warning = ""
+        try:
+            check_limits(make_shape(self.params), self.params, self.t_max)
+        except ValueError as exc:
+            warning = f"; the car cannot track the whole trajectory: {exc}"
+        except NotImplementedError:
+            pass  # simulate() reports it
         try:
             self.samples = await loop.run_in_executor(
                 None, simulate, initial, self.params, self.dt, self.t_max)
@@ -112,6 +125,6 @@ class SimBackend(Backend):
             last = self.samples[-1]
             self.status = status_msg(
                 "idle", f"||p* - p|| = {last[7]:.3f} m at t = {last[0]:.2f} s, "
-                        f"{len(self.samples)} samples")
+                        f"{len(self.samples)} samples{warning}")
             await self.server.broadcast(samples_msg(self.samples, reset=True))
         await self.server.broadcast(self.status)

@@ -23,6 +23,8 @@
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>xacro</exec_depend>
   <exec_depend>rviz2</exec_depend>
+  <!-- live.launch.py. robomaster_ros has no rosdep key: docker/Dockerfile builds it. -->
+  <exec_depend>vrpn_mocap</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

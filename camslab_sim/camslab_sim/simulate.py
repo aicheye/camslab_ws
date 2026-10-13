@@ -5,7 +5,7 @@ import numpy as np
 
 from .controller import control
 from .plant import step
-from .trajectory import check_limits, make_shape, reference
+from .trajectory import make_shape, reference
 from .types import Params, State
 
 
@@ -20,12 +20,11 @@ def clamp(v: float, w: float, params: Params):
 def simulate(initial: State, params: Params, dt: float, t_max: float):
     """Track params.shape from t = 0 to t_max.
 
-    Raises ValueError from check_limits() if the reference breaks kappa_max or w_max.
-    Returns rows of [t, x, y, qx, qy, v, w, dist, xr, yr], the column order of
+    A reference past kappa_max or w_max is tracked anyway; clamp() keeps the commands
+    inside the limits, so the robot lags p* there. Returns rows of [t, x, y, qx, qy, v, w, dist, xr, yr], the column order of
     camslab_webui.server.SAMPLE_FIELDS, with dist = ||p* - p|| and (xr, yr) = p*.
     """
     shape = make_shape(params)
-    check_limits(shape, params, t_max)
     state = initial
     samples = []
     for k in range(int(round(t_max / dt)) + 1):

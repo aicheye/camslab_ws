@@ -10,7 +10,8 @@ services:
     ipc: host
     environment:
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
-      - DISPLAY=${DISPLAY:-:0}   # Gazebo GUI through the host X server (run `xhost +local:` first)
+      - DISPLAY=${DISPLAY:-:0}   # Gazebo GUI and RViz through the host X server
+      - XAUTHORITY=/tmp/.Xauthority   # host X cookie, so `xhost +local:` is not needed
       - QT_X11_NO_MITSHM=1
     devices:
       - /dev/dri:/dev/dri        # GPU rendering for the Gazebo GUI
@@ -18,6 +19,7 @@ services:
       - label=disable            # SELinux: allow the X11 socket without relabelling it
     volumes:
       - /tmp/.X11-unix:/tmp/.X11-unix:ro
+      - ${XAUTHORITY:-${HOME}/.Xauthority}:/tmp/.Xauthority:ro
       - ..:/ws/src/camslab_ws:z
       - ws_build:/ws/build
       - ws_install:/ws/install

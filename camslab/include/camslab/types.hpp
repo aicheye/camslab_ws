@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <string>
+#include <vector>
 
 namespace camslab
 {
@@ -11,6 +12,12 @@ struct Vec2
   double x{0.0};
   double y{0.0};
   inline Vec2 operator-() const { return {-x, -y}; }
+  inline Vec2 & operator+=(const Vec2 & rhs)
+  {
+    this->x += rhs.x;
+    this->y += rhs.y;
+    return *this;
+  }
   double norm() const { return std::sqrt(x * x + y * y); }
 
   inline static double dot(const Vec2 & u, const Vec2 & v) { return u.x * v.x + u.y * v.y; }
@@ -67,24 +74,31 @@ struct Reference
 struct Params
 {
   // Trajectory. (x0, y0, theta0) is the pose of the trajectory frame: the
-  // circle starts at (x0, y0) heading theta0, the Gerono lemniscate is centred
-  // on (x0, y0) with its long axis along theta0.
-  std::string shape{"circle"};  // circle or gerono
+  // circle starts at (x0, y0) heading theta0, the Gerono lemniscate and the
+  // ellipse are centred on (x0, y0) with axis a along theta0 and start at lap
+  // angle phi0, and the rectangle is centred on (x0, y0) with sides 2a along theta0 and 2b. The
+  // spline ignores (x0, y0, theta0) and goes around its control points.
+  std::string shape{"circle"};  // circle, gerono, ellipse, rectangle or spline
   double x0{2.0};               // [m]
   double y0{1.0};               // [m]
   double theta0{0.0};           // [rad]
   double circle_speed{0.3};     // circle: constant speed [m/s]
   double kappa{1.0};            // circle: curvature 1/r [1/m], 0 is a straight line
-  double a{2.0};                // gerono: half the length of the long axis [m]
-  double period{40.0};          // gerono: time for one lap [s]
+  double a{2.0};  // gerono, ellipse: half the long axis; rectangle: half the side along theta0 [m]
+  double b{1.0};  // ellipse: half the length of the short axis [m]
+  double period{40.0};  // gerono, ellipse, rectangle, spline: time for one lap [s]
+  double phi0{0.0};     // gerono, ellipse: lap angle at t = 0 [rad]
+  // spline: control points P_k [m], at least 4 points
+  std::vector<Vec2> control_points{
+    {1.0, 0.8}, {2.5, 1.2}, {4.0, 0.8}, {4.4, 2.5}, {2.5, 3.2}, {0.6, 2.5}};
 
   // Control law gains, all > 0.
   double k_par{1.0};   // k_parallel [1/s]
   double k_perp{4.0};  // k_perp [1/m^2]
   double k_q{2.0};     // k_q [1/s]
 
-  // Limits. The reference must keep |kappa*| <= kappa_max and |w*| <= w_max
-  // (checkLimits in trajectory.hpp), and the controller node clamps every command to
+  // Limits. A reference with |kappa*| > kappa_max or |w*| > w_max is accepted with a
+  // warning (checkLimits in trajectory.hpp), and the controller node clamps every command to
   // |v| <= v_max, |w| <= min(w_max, kappa_max |v|).
   double kappa_max{2.9};  // [1/m]; the R2 turns at most tan(0.6) / 0.235
   double w_max{2.0};      // [rad/s]

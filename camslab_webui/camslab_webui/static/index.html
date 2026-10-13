@@ -23,7 +23,7 @@
     <section class="card world-card">
       <div class="card-head">
         <h2>Global frame</h2>
-        <span class="muted">dashed: p*(t) · drag: pan · wheel: zoom</span>
+        <span class="muted">orange line: p*(t) · drag: pan · wheel: zoom</span>
         <span class="spacer"></span>
         <button id="fit" type="button">Fit</button>
         <button id="view-reset" type="button">Reset view</button>
@@ -68,9 +68,20 @@
               <select id="shape">
                 <option value="circle">circle</option>
                 <option value="gerono">gerono</option>
+                <option value="ellipse">ellipse</option>
+                <option value="rectangle">rectangle</option>
+                <option value="spline">spline</option>
               </select>
             </label>
             <button id="traj-random" type="button">Random</button>
+          </fieldset>
+          <fieldset id="spline-set" hidden>
+            <legend>Spline control points</legend>
+            <label><input id="spline-edit" type="checkbox"> edit</label>
+            <button id="spline-undo" type="button">Undo</button>
+            <button id="spline-clear" type="button">Clear</button>
+            <button id="spline-apply" type="button" class="primary">Apply</button>
+            <div id="spline-info" class="muted poly-info"></div>
           </fieldset>
           <fieldset id="initial-set">
             <legend>Initial pose</legend>
@@ -79,6 +90,16 @@
             <label>θ [deg] <input id="init-th" type="number" step="5"></label>
             <button id="init-random" type="button">Random</button>
             <label><input id="init-random-on-start" type="checkbox"> random on Start</label>
+          </fieldset>
+          <fieldset id="polytope-set" hidden>
+            <legend>Safety polytope</legend>
+            <label><input id="poly-edit" type="checkbox"> edit</label>
+            <button id="poly-add-robot" type="button">Add robot position</button>
+            <button id="poly-undo" type="button">Undo</button>
+            <button id="poly-clear" type="button">Clear</button>
+            <label>margin [m] <input id="poly-margin" type="number" step="0.05" min="0"></label>
+            <button id="poly-apply" type="button" class="primary">Apply and save</button>
+            <div id="poly-info" class="muted poly-info"></div>
           </fieldset>
           <fieldset>
             <legend>Parameters</legend>

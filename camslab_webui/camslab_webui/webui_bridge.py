@@ -11,7 +11,14 @@ the other robots, streamed as "fleet" messages. Start and Stop enable and disabl
 controller, and parameters set in the UI go to every controller, since all of them track
 the same trajectory. The Random button sends random trajectory parameters inside the
 area (random_trajectory.py) to the first controller atomically, tries another set when the
-controller rejects one for its kappa_max or w_max, and copies the accepted set to the others.
+controller warns that one breaks its kappa_max or w_max, and copies the last set to the
+others. A controller accepts a trajectory past those limits and returns the warning as the
+reason of the successful change; the UI shows it.
+
+The safety polytope editor sends corners; the bridge sets the convex hull of them
+(polytope.py) as `polytope` and `polytope_margin` on the first controller, and once it
+accepts them, on the others, and writes them to `polytope_file` so the next launch loads
+them. No corners removes the polytope and deletes the file.
 
 rclpy spins in a background thread. aiohttp runs in the main thread.
 """
@@ -30,17 +37,34 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
 from std_srvs.srv import SetBool
 
+from .polytope import convex_hull, write_file
 from .random_trajectory import random_params
 from .server import Backend, UiServer, fleet_msg, hello_msg, samples_msg, status_msg
 
-# Controller parameters shown in the UI. shape is a string, the rest are doubles.
-PARAM_NAMES = ["shape", "x0", "y0", "theta0", "circle_speed", "kappa", "a", "period",
-               "k_par", "k_perp", "k_q", "kappa_max", "w_max", "v_max", "t_max"]
+# Controller parameters shown in the UI. shape is a string, control_points a double array
+# [x0, y0, x1, y1, ...], the rest are doubles.
+PARAM_NAMES = ["shape", "x0", "y0", "theta0", "circle_speed", "kappa", "a", "b", "period",
+               "phi0", "control_points", "k_par", "k_perp", "k_q", "kappa_max", "w_max",
+               "v_max", "t_max"]
+# Controller parameters of the safety polytope editor, fetched with PARAM_NAMES.
+POLYTOPE_NAMES = ["polytope", "polytope_margin"]
 MAX_SAMPLES = 20000
 # Poses arrive every 10 ms, so a sample due at 40 ms can read as 39.99 ms after float
 # rounding. Accepting 5 ms early keeps 25 Hz from dropping to 20 Hz.
 SAMPLE_SLACK = 0.005
 RANDOM_TRIES = 50
+
+
+def parameter(name, value):
+    """rcl_interfaces Parameter of a PARAM_NAMES value."""
+    if name == "shape":
+        pv = ParameterValue(type=ParameterType.PARAMETER_STRING, string_value=str(value))
+    elif name == "control_points":
+        pv = ParameterValue(type=ParameterType.PARAMETER_DOUBLE_ARRAY,
+                            double_array_value=[float(v) for v in value])
+    else:
+        pv = ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=float(value))
+    return Parameter(name=name, value=pv)
 
 
 def planar(msg):
@@ -77,6 +101,8 @@ class WebuiBridgeNode(Node, Backend):
         host = self.declare_parameter("host", "0.0.0.0").value
         port = self.declare_parameter("port", 8000).value
         sample_rate = self.declare_parameter("sample_rate", 25.0).value
+        # Where the safety polytope is saved; empty applies it without saving.
+        self.polytope_file = self.declare_parameter("polytope_file", "").value
         self.sample_period = 1.0 / sample_rate
 
         self.lock = threading.Lock()
@@ -85,6 +111,7 @@ class WebuiBridgeNode(Node, Backend):
         self.t0 = None
         self.path = []
         self.params = {}
+        self.polytope = {"points": [], "margin": 0.2}  # as the first controller has it
         # Must match the controllers' start_enabled, so the UI status is right before Start.
         self.enabled = self.declare_parameter("start_enabled", False).value
         self.status = status_msg("idle")
@@ -171,15 +198,24 @@ class WebuiBridgeNode(Node, Backend):
     def fetch_params(self):
         if self.params or not self.get_params_client.service_is_ready():
             return
-        future = self.get_params_client.call_async(GetParameters.Request(names=PARAM_NAMES))
+        future = self.get_params_client.call_async(
+            GetParameters.Request(names=PARAM_NAMES + POLYTOPE_NAMES))
         future.add_done_callback(self.on_params_fetched)
 
     def on_params_fetched(self, future):
         values = future.result().values
         with self.lock:
-            for name, value in zip(PARAM_NAMES, values):
-                if value.type == ParameterType.PARAMETER_DOUBLE:
+            for name, value in zip(PARAM_NAMES + POLYTOPE_NAMES, values):
+                if name == "polytope":
+                    xy = list(value.double_array_value)
+                    self.polytope["points"] = [xy[i:i + 2] for i in range(0, len(xy) - 1, 2)]
+                elif name == "polytope_margin":
+                    if value.type == ParameterType.PARAMETER_DOUBLE:
+                        self.polytope["margin"] = value.double_value
+                elif value.type == ParameterType.PARAMETER_DOUBLE:
                     self.params[name] = value.double_value
+                elif value.type == ParameterType.PARAMETER_DOUBLE_ARRAY:
+                    self.params[name] = list(value.double_array_value)
                 elif value.type == ParameterType.PARAMETER_STRING:
                     self.params[name] = value.string_value
         self.server.broadcast_threadsafe(self.config_msg())
@@ -189,7 +225,8 @@ class WebuiBridgeNode(Node, Backend):
     def config_msg(self):
         with self.lock:
             return {"type": "config", "params": dict(self.params), "path": list(self.path),
-                    "initial": None}
+                    "initial": None,
+                    "polytope": {**self.polytope, "file": self.polytope_file}}
 
     def on_connect(self):
         with self.lock:
@@ -197,7 +234,8 @@ class WebuiBridgeNode(Node, Backend):
             fleet = {r.name: list(r.rows) for r in self.robots.values() if r is not self.main}
             status = self.status
         # Robots spawn where the fleet file says, so the UI has no initial-pose controls.
-        return [hello_msg(self.label, "live", False, self.robot_name), self.config_msg(),
+        return [hello_msg(self.label, "live", False, self.robot_name, can_set_polytope=True),
+                self.config_msg(),
                 samples_msg(samples, reset=True), fleet_msg(fleet, reset=True), status]
 
     async def on_message(self, msg):
@@ -206,6 +244,8 @@ class WebuiBridgeNode(Node, Backend):
             self.set_params({k: v for k, v in msg["params"].items() if k in PARAM_NAMES})
         elif kind == "randomize_trajectory":
             self.randomize()
+        elif kind == "set_polytope":
+            self.set_polytope(msg["points"], float(msg["margin"]))
         elif kind == "start":
             self.set_enabled(True)
         elif kind == "stop":
@@ -235,13 +275,7 @@ class WebuiBridgeNode(Node, Backend):
             future.add_done_callback(done)
 
     def set_params(self, params):
-        parameters = []
-        for name, value in params.items():
-            if name == "shape":
-                pv = ParameterValue(type=ParameterType.PARAMETER_STRING, string_value=str(value))
-            else:
-                pv = ParameterValue(type=ParameterType.PARAMETER_DOUBLE, double_value=float(value))
-            parameters.append(Parameter(name=name, value=pv))
+        parameters = [parameter(name, value) for name, value in params.items()]
         for i, client in enumerate(self.set_params_clients):
             if not client.service_is_ready():
                 self.report_error(f"{client.srv_name} is not available")
@@ -255,6 +289,8 @@ class WebuiBridgeNode(Node, Backend):
                     elif main:
                         with self.lock:
                             self.params[name] = value
+                        if result.reason:
+                            self.report_warning(result.reason)
                 if main:
                     self.server.broadcast_threadsafe(self.config_msg())
             future.add_done_callback(done)
@@ -274,9 +310,7 @@ class WebuiBridgeNode(Node, Backend):
             self.report_error(str(exc))
             return
         request = SetParametersAtomically.Request(parameters=[
-            Parameter(name=name, value=ParameterValue(
-                type=ParameterType.PARAMETER_DOUBLE, double_value=value))
-            for name, value in candidate.items()])
+            parameter(name, value) for name, value in candidate.items()])
         main, others = self.atomic_clients[0], self.atomic_clients[1:]
         if not main.service_is_ready():
             self.report_error(f"{main.srv_name} is not available")
@@ -284,13 +318,15 @@ class WebuiBridgeNode(Node, Backend):
 
         def done(f):
             result = f.result().result
-            if not result.successful:
-                if tries_left > 1:
-                    self.randomize(tries_left - 1)
-                else:
-                    self.report_error(f"no random {params['shape']} accepted in "
-                                      f"{RANDOM_TRIES} tries: {result.reason}")
+            if (not result.successful or result.reason) and tries_left > 1:
+                self.randomize(tries_left - 1)
                 return
+            if not result.successful:
+                self.report_error(f"no random {params['shape']} accepted in "
+                                  f"{RANDOM_TRIES} tries: {result.reason}")
+                return
+            if result.reason:
+                self.report_warning(result.reason)
             for client in others:
                 if client.service_is_ready():
                     client.call_async(request)
@@ -300,6 +336,59 @@ class WebuiBridgeNode(Node, Backend):
                 self.params.update(candidate)
             self.server.broadcast_threadsafe(self.config_msg())
         main.call_async(request).add_done_callback(done)
+
+    def set_polytope(self, points, margin):
+        """Set the convex hull of points as every controller's safety polytope, first
+        controller first, and save it. Empty points removes the polytope."""
+        corners = convex_hull(points)
+        if 0 < len(corners) < 3:
+            self.report_error("the safety polytope needs at least 3 corners that are not "
+                              "on one line")
+            return
+        if margin < 0:
+            self.report_error("the safety polytope margin must be 0 or more")
+            return
+        request = SetParametersAtomically.Request(parameters=[
+            Parameter(name="polytope", value=ParameterValue(
+                type=ParameterType.PARAMETER_DOUBLE_ARRAY,
+                double_array_value=[c for corner in corners for c in corner])),
+            Parameter(name="polytope_margin", value=ParameterValue(
+                type=ParameterType.PARAMETER_DOUBLE, double_value=margin))])
+        main, others = self.atomic_clients[0], self.atomic_clients[1:]
+        if not main.service_is_ready():
+            self.report_error(f"{main.srv_name} is not available")
+            return
+
+        def done(f):
+            result = f.result().result
+            if not result.successful:
+                self.report_error(f"safety polytope rejected: {result.reason}")
+                return
+            for client in others:
+                if client.service_is_ready():
+                    client.call_async(request)
+                else:
+                    self.report_error(f"{client.srv_name} is not available")
+            with self.lock:
+                self.polytope = {"points": corners, "margin": margin}
+            self.server.broadcast_threadsafe(self.config_msg())
+            if not self.polytope_file:
+                self.report_error("safety polytope applied but not saved: the bridge has "
+                                  "no polytope_file")
+                return
+            try:
+                write_file(self.polytope_file, corners, margin)
+            except OSError as exc:
+                self.report_error(f"safety polytope applied but not saved: {exc}")
+        main.call_async(request).add_done_callback(done)
+
+    def report_warning(self, message):
+        """Shows message in the UI header without changing the idle or running state."""
+        self.get_logger().warning(message)
+        with self.lock:
+            state = self.status["state"]
+        self.server.broadcast_threadsafe(
+            status_msg(state, f"the car cannot track the whole trajectory: {message}"))
 
     def report_error(self, message):
         self.get_logger().error(message)

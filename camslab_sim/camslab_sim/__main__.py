@@ -27,11 +27,14 @@ def main():
     ap.add_argument("--seed", type=int, help="seed for the random initial pose")
     ap.add_argument("--dt", type=float, default=0.02)  # 50 Hz, the Gazebo controller rate
     ap.add_argument("--t-max", type=float, default=60.0)  # covers a Gerono lap of up to 60 s
-    # One --<name> option per field of Params, e.g. --shape gerono --k-perp 4.
+    # One --<name> option per field of Params, e.g. --shape gerono --k-perp 4,
+    # --control-points 1 1 3 1 3 3 1 3.
     for field in dataclasses.fields(Params):
         flag = "--" + field.name.replace("_", "-")
         if field.type is str or field.type == "str":
             ap.add_argument(flag, default=field.default, choices=SHAPES)
+        elif field.type is tuple or field.type == "tuple":
+            ap.add_argument(flag, type=float, nargs="+", default=field.default)
         else:
             ap.add_argument(flag, type=float, default=field.default)
     ap.add_argument("--csv", metavar="PATH", help="run once, write samples, exit")

@@ -1,16 +1,23 @@
+# Controller settings shared by Gazebo (sim.yaml) and the real robot (live.yaml). Each of
+# those files adds its robot's settings on top under `controller:`.
 # /** matches the node in any namespace (gazebo_multi.launch.py runs one per robot).
 # Same trajectory and gains as camslab_sim/types.py Params.
 /**/controller:
   ros__parameters:
-    # Trajectory. (x0, y0, theta0): circle start pose, or Gerono centre and axis.
-    shape: circle      # circle or gerono
+    # Trajectory. (x0, y0, theta0): circle start pose, or Gerono / ellipse / rectangle centre and axis.
+    shape: circle      # circle, gerono, ellipse, rectangle or spline
     x0: 2.0            # [m]
     y0: 1.0            # [m]
     theta0: 0.0        # [rad]
     circle_speed: 0.3  # circle: constant speed [m/s]
     kappa: 1.0         # circle: curvature 1/r [1/m], 0 is a straight line
-    a: 2.0             # gerono: half the length of the long axis [m]
-    period: 40.0       # gerono: time for one lap [s]
+    a: 2.0             # gerono, ellipse: half the long axis; rectangle: half the side along theta0 [m]
+    b: 1.0             # ellipse: half the short axis; rectangle: half the other side [m]
+    period: 40.0       # gerono, ellipse, rectangle, spline: time for one lap [s]
+    phi0: 0.0          # gerono, ellipse: lap angle at t = 0 [rad]
+    # spline: control points [x0, y0, x1, y1, ...] [m], at least 4 points, numbers with a
+    # decimal point. The path goes around them and stays inside their outline.
+    control_points: [1.0, 0.8, 2.5, 1.2, 4.0, 0.8, 4.4, 2.5, 2.5, 3.2, 0.6, 2.5]
     t_max: 60.0        # ref_path and the limit check cover t in [0, t_max] [s]
 
     # Control law gains, all > 0.
@@ -18,11 +25,12 @@
     k_perp: 4.0        # [1/m^2]
     k_q: 2.0           # [1/s]
 
-    # Limits. The reference must keep |kappa*| <= kappa_max and |w*| <= w_max, and every
-    # command is clamped to |v| <= v_max, |w| <= min(w_max, kappa_max |v|).
-    kappa_max: 2.9     # tan(0.6) / 0.235, the R2's steering limit [1/m]
+    # Limits. A reference with |kappa*| > kappa_max or |w*| > w_max is accepted with a
+    # warning, and every command is clamped to |v| <= v_max, |w| <= min(w_max, kappa_max |v|).
+    # kappa_max depends on the robot and is set in sim.yaml and live.yaml.
     w_max: 2.0         # [rad/s]
     v_max: 0.6         # [m/s]
 
     pose_timeout: 0.5  # zero command when the last pose is older than this [s]
     rate: 50.0         # [Hz]
+
