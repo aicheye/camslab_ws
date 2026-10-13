@@ -33,6 +33,7 @@ running
 paths
 safety-area
 your-controller
+custom-node
 troubleshooting
 how-it-works
 ```
