@@ -9,46 +9,58 @@ from .base import Estimator, Measurement
 from .filters import filter_matrices
 from .paths import circle_geometry
 
-S = np.array([[0.0, -1.0], [1.0, 0.0]])
-
 
 class CircleEstimator(Estimator):
+    """The estimator part of ode() in camslab_offline/path_circle/circle.py, without the
+    plant. See docs/path-estimation-hints.md for the derivation.
+
+    X = [xi_f (5 filter states), r_hat, c_x_hat, c_y_hat], one filter state per signal in
+    y = [xi^2 / 2, ||p||^2 / 2, xi, p_x, p_y].
+    """
+
     name = "circle"
     fields = ("r", "c_x", "c_y")
     shapes = ("circle",)
 
     def __init__(self, path: dict, lam: float = 1.0, gamma: float = 10.0,
-                 theta0: tuple[float, float, float] = (0.5, 0.0, 0.0)):
-        super().__init__(path)
+                 theta0=(0.5, 0.0, 0.0)):
+        super().__init__(path, theta0)
         self.lam = lam
         self.gamma = gamma * np.eye(3)
         self.F, self.G, self.H = filter_matrices(lam, 1)
-        self.theta_hat = np.array(theta0, dtype=float)
-        self.xi_f = None
         self.phase = None
 
-    def signals(self, m: Measurement) -> np.ndarray:
-        return np.array([m.xi**2 / 2, m.p @ m.p / 2, m.xi, m.p[0], m.p[1]])
+    def initial_state(self, m: Measurement) -> np.ndarray:
+        """Filter states at the steady state of the first measurement, so the first
+        s/Lambda y is 0. From 0, the first phi is as large as p, and forward Euler at
+        dt = 0.02 s with gamma = 10 reached 1e6 for a robot starting at (4.2, 3.55)."""
+        px, py = m.p
+        y = np.array([m.xi**2 / 2, px**2 / 2 + py**2 / 2, m.xi, px, py])
+        return np.concatenate((y / self.lam, self.theta0))
 
-    def update(self, m: Measurement, dt: float) -> None:
-        y = self.signals(m)
-        if self.xi_f is None:
-            self.xi_f = (y / self.lam)[:, None]
+    def dynamics(self, X: np.ndarray, m: Measurement) -> np.ndarray:
+        F, G, H, gamma = self.F, self.G, self.H, self.gamma
 
-        W = self.xi_f @ self.H.T + np.outer(y, np.r_[0.0, self.G])
+        xi_f = X[0:5]
+        theta_hat = X[5:8]
+
+        px, py = m.p
+        xi = m.xi
+
+        y = np.array([xi**2 / 2, px**2 / 2 + py**2 / 2, xi, px, py])
+        W = np.array([H @ [xi_f[i]] + np.concatenate(([0], G)) * y[i] for i in range(5)])
         s_y = W[:, 1]
+
         z = s_y[0] - s_y[1]
         phi = -s_y[2:5]
-        z_hat = self.theta_hat @ phi
 
-        dxi_f = self.xi_f @ self.F.T + np.outer(y, self.G)
-        dtheta_hat = -self.gamma @ phi * (z_hat - z)
+        z_hat = theta_hat @ phi
 
-        self.xi_f = self.xi_f + dt * dxi_f
-        self.theta_hat = self.theta_hat + dt * dtheta_hat
+        dxi_f = np.array([F @ [xi_f[i]] + G * y[i] for i in range(5)]).ravel()
 
-    def estimate(self) -> np.ndarray:
-        return self.theta_hat.copy()
+        dtheta_hat = -gamma @ phi * (z_hat - z)
+
+        return np.concatenate((dxi_f, dtheta_hat))
 
     def truth(self) -> np.ndarray:
         c, r = circle_geometry(self.path)
@@ -58,15 +70,17 @@ class CircleEstimator(Estimator):
         """Certainty equivalence: drive around the estimated circle at circle_speed, in the
         direction of the path (the sign of kappa). r_hat is held at or above 1 / kappa_max,
         the tightest circle the car can turn."""
-        r_hat = max(self.theta_hat[0], 1.0 / self.path["kappa_max"])
-        c_hat = self.theta_hat[1:3]
+        r_hat, c_x_hat, c_y_hat = self.estimate()
+        r_hat = max(r_hat, 1.0 / self.path["kappa_max"])
         direction = 1.0 if self.path["kappa"] >= 0 else -1.0
         v = self.path["circle_speed"]
+
         if self.phase is None:
-            d = m.p - c_hat
-            self.phase = math.atan2(d[1], d[0])
+            self.phase = math.atan2(m.p[1] - c_y_hat, m.p[0] - c_x_hat)
         else:
             self.phase += dt * direction * v / r_hat
+
         u = np.array([math.cos(self.phase), math.sin(self.phase)])
-        return Reference(p=c_hat + r_hat * u, q=direction * (S @ u), v=v,
-                              w=direction * v / r_hat, kappa=direction / r_hat)
+        tangent = np.array([-u[1], u[0]])
+        return Reference(p=np.array([c_x_hat, c_y_hat]) + r_hat * u, q=direction * tangent,
+                         v=v, w=direction * v / r_hat, kappa=direction / r_hat)

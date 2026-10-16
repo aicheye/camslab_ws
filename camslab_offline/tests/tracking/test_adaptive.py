@@ -69,14 +69,14 @@ class TrueCircle(Estimator):
     name, fields, shapes = "true", ("r",), ("circle",)
 
     def __init__(self, path):
-        super().__init__(path)
+        super().__init__(path, [1.0])
         self.shape = make_shape(Params(**{k: v for k, v in path.items()}))
 
-    def update(self, m, dt):
-        pass
+    def initial_state(self, m):
+        return self.theta0.copy()
 
-    def estimate(self):
-        return np.array([1.0])
+    def dynamics(self, X, m):
+        return np.zeros_like(X)
 
     def reference(self, m, dt):
         return reference(self.shape, m.t)
