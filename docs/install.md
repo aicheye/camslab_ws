@@ -66,5 +66,5 @@ source install/setup.bash
 ```
 
 Keep that shell open while running the simulator ({doc}`running`). Repeat the build after
-changing a `package.xml`, `CMakeLists.txt`, or Python package dependency. Rebuild the
+changing a `package.xml`, a `setup.py`, or a Python package dependency. Rebuild the
 image after changing the Dockerfile or adding a system dependency.

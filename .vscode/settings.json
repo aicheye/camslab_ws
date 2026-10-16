@@ -1,4 +1,0 @@
-{
-  "cmake.sourceDirectory": "${workspaceFolder}/camslab",
-  "C_Cpp.clang_format_style": "file"
-}

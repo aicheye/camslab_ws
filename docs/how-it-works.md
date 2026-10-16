@@ -56,5 +56,5 @@ The controller runs at 50 Hz. If no new pose arrives for 0.5 s, it commands zero
 | `camslab/config/params.yaml` | path and controller settings |
 | `camslab/config/sim.yaml` | simulated cars and their start poses |
 | `camslab/config/live.yaml` | real RoboMaster S1 and motion capture connection |
-| `camslab/src/controller.cpp` | control law |
-| `camslab/src/trajectory.cpp` | path shapes |
+| `camslab/camslab/controller.py` | control law |
+| `camslab/camslab/trajectory.py` | path shapes |

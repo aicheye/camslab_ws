@@ -1,4 +1,3 @@
-# Sphinx configuration for the camslab documentation on Read the Docs.
 
 project = "CAMS Lab Gazebo Simulator"
 author = "CAMS Lab"
@@ -9,7 +8,8 @@ myst_enable_extensions = ["colon_fence", "dollarmath", "amsmath", "deflist"]
 myst_heading_anchors = 3
 
 source_suffix = {".md": "markdown"}
-exclude_patterns = ["_build", "requirements.txt", "ode-hints.md", "estimation-hints.md"]
+exclude_patterns = ["_build", "requirements.txt", "ode-hints.md", "estimation-hints.md",
+                    "path-estimation-hints.md"]
 
 html_theme = "sphinx_rtd_theme"
 html_title = "CAMS Lab Gazebo Simulator"

@@ -1,37 +1,4 @@
-"""A real DJI RoboMaster S1 tracking the reference trajectory, with motion capture pose,
-RViz and the web UI.
-
-    ros2 launch camslab live.launch.py                        # config/live.yaml
-    ros2 launch camslab live.launch.py conn_type:=ap
-    ros2 launch camslab live.launch.py config:=/path/to/other.yaml
-
-config/live.yaml has the robot, mocap and launch settings; a launch argument with the
-same name overrides a value in it. The controller tracks the trajectory set in
-config/params.yaml, with live.yaml `controller` on top.
-
-The robot and the mocap server replace Gazebo:
-
-  vrpn_mocap         client of the VRPN server `mocap_server`:`mocap_port`. Publishes the
-                     rigid body `tracker` as /vrpn_mocap/<tracker>/pose, remapped to
-                     /<name>/pose, in frame `map`
-  robomaster_ros     s1.launch in namespace <name>: the S1 driver takes <name>/cmd_vel
-                     (linear.x, angular.z) and stops when no command arrives for
-                     `chassis_timeout` seconds
-  controller         <name>/pose -> <name>/cmd_vel, ref_pose, ref_path, safety_polytope;
-                     parameters from params.yaml, live.yaml `controller` and, when the
-                     file exists, `polytope`
-  pose_tf            <name>/pose -> TF map -> <name>/mocap
-  rviz2, webui_bridge  as in gazebo_multi.launch.py, for the one robot
-
-Every node runs on the wall clock (no use_sim_time). The rigid body in the mocap software
-must be named `tracker` (default <name>) and streamed with Z up, since the controller
-takes the heading as the yaw about Z.
-
-The controller starts disabled (start_enabled: false): press Start in the web UI, or call
-/<name>/controller/enable. robomaster_ros publishes TF <name>/odom -> <name>/base_link from
-wheel odometry, which is not connected to `map`, so RViz draws the robot from its mocap
-pose (<name>/pose display and the <name>/mocap axes) instead of a RobotModel.
-"""
+"""A real DJI RoboMaster S1 tracking the reference, with motion capture, RViz and the web UI."""
 
 import os
 import re
@@ -48,7 +15,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-import camslab_settings  # noqa: E402
+import camslab_settings
 
 
 def rviz_config(share, name):
@@ -90,8 +57,6 @@ def robot(context):
     if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
         raise RuntimeError(f"robot name {name!r} must match [a-z][a-z0-9_]*")
     tracker = str(settings["tracker"] or name)
-    # vrpn_mocap names the tracker's sub-node, and so its topic, after the tracker name
-    # with every run of characters other than [a-zA-Z0-9_] replaced by one _.
     tracker_ns = re.sub(r"_+", "_", re.sub(r"[^a-zA-Z0-9_]", "_", tracker))
     start_enabled = bool(settings["start_enabled"])
     polytope = LaunchConfiguration("polytope").perform(context)

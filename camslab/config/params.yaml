@@ -1,7 +1,7 @@
 # Controller settings shared by Gazebo (sim.yaml) and the real robot (live.yaml). Each of
 # those files adds its robot's settings on top under `controller:`.
 # /** matches the node in any namespace (gazebo_multi.launch.py runs one per robot).
-# Same trajectory and gains as camslab_sim/types.py Params.
+# Same trajectory and gains as camslab/camslab/types.py Params.
 /**/controller:
   ros__parameters:
     # Trajectory. (x0, y0, theta0): circle start pose, or Gerono / ellipse / rectangle centre and axis.

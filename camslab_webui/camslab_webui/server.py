@@ -1,8 +1,4 @@
-"""HTTP + WebSocket server shared by the Python sim and the ROS 2 bridge.
-
-The browser loads the static page from "/" and opens a WebSocket on "/ws".
-All messages are JSON objects with a "type" field. See README.md for the list.
-"""
+"""HTTP + WebSocket server shared by the Python sim and the ROS 2 bridge."""
 
 import asyncio
 import json
@@ -13,7 +9,6 @@ from aiohttp import WSMsgType, web
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-# Column order of each row in a "samples" message. dist = ||p* - p||, (xr, yr) = p*.
 SAMPLE_FIELDS = ["t", "x", "y", "qx", "qy", "v", "w", "dist", "xr", "yr"]
 
 log = logging.getLogger("camslab_webui")
@@ -44,6 +39,19 @@ def hello_msg(backend, mode, can_set_pose, robot_name="", can_set_polytope=False
         "robot_name": robot_name,
         "fields": SAMPLE_FIELDS,
     }
+
+
+def adaptive_config(estimator, mode, choices, modes, fields=(), truth=None, error="",
+                    editable=True):
+    """The "adaptive" entry of a "config" message. estimator is the selected name, "" for
+    none. fields name the theta_hat columns appended to each sample row after
+    SAMPLE_FIELDS, and truth is theta* in the same order, or None when unknown. error says
+    why the estimator cannot run with the current parameters. editable is false when the
+    backend fixes the estimator at launch."""
+    return {"estimator": estimator, "mode": mode, "choices": list(choices),
+            "modes": list(modes), "fields": list(fields),
+            "truth": None if truth is None else [float(x) for x in truth],
+            "error": error, "editable": editable}
 
 
 def status_msg(state, message=""):

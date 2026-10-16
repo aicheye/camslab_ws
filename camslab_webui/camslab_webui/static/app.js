@@ -1,16 +1,12 @@
 'use strict';
 
-// Column order of a sample row. Matches SAMPLE_FIELDS in server.py.
-// DIST is ||p* - p||, (XR, YR) is p*. XR and YR are null before a live robot has a reference.
 const T = 0, X = 1, Y = 2, QX = 3, QY = 4, V = 5, W = 6, DIST = 7, XR = 8, YR = 9;
 const FIELDS = ['t', 'x', 'y', 'qx', 'qy', 'v', 'w', 'dist', 'xr', 'yr'];
 const MAX_LIVE_SAMPLES = 20000;
 
-// Robot footprint drawn on the map, in metres.
 const ROBOT_LENGTH = 0.30;
 const ROBOT_WIDTH = 0.18;
 
-// Parameters shown, in this order; others follow. shape has its own select.
 const PARAM_LABELS = {
   x0: 'x0 [m]',
   y0: 'y0 [m]',
@@ -36,31 +32,29 @@ const STATUS_ICONS = { idle: '●', running: '▶', reached: '✓', error: '✕'
 const state = {
   mode: 'batch',
   canSetPose: false,
-  robotName: '',  // label of the robot in samples; empty draws none
+  robotName: '',
   samples: [],
-  cursor: -1,   // index of the sample the robot is drawn at
-  hover: -1,    // index of the sample under the pointer
+  cursor: -1,
+  hover: -1,
   playing: false,
   playT: 0,
   lastFrame: 0,
-  fleet: {},      // other robots: {name: [row, ...]}, rows as in samples, latest last
-  selected: '',   // robot shown in plots and readout: '' is the one in samples
-  path: [],       // [[x, y], ...], p*(t) sampled over the run
-  initial: null,  // {x, y, theta}
+  fleet: {},
+  selected: '',
+  path: [],
+  initial: null,
   params: {},
-  polytope: { points: [], margin: 0.2, file: '' },  // as the controllers have it
+  polytope: { points: [], margin: 0.2, file: '' },
+  adaptive: null,
 };
 
-// Corners being edited, [[x, y], ...] in click order, or null when not editing.
 let polyDraft = null;
-const POLY_SNAP = 0.05;  // clicked corners are rounded to this [m]
+const POLY_SNAP = 0.05;
 
-// Spline control points being edited, [[x, y], ...] in path order, or null when not
-// editing. splineHistory holds earlier drafts for Undo.
 let splineDraft = null;
 let splineHistory = [];
 const SPLINE_MIN_POINTS = 4;
-const PICK_RADIUS = 10;  // a press this close to a control point grabs it [px]
+const PICK_RADIUS = 10;
 
 const $ = (id) => document.getElementById(id);
 const world = $('world');
@@ -68,14 +62,14 @@ const plots = [
   { canvas: $('plot-dist'), col: DIST, refs: () => [] },
   { canvas: $('plot-v'), col: V, refs: () => [] },
   { canvas: $('plot-w'), col: W, refs: () => [] },
+  { canvas: $('plot-estimates'), series: () => [], refs: () => [] },
 ];
+const ESTIMATE_COLORS = ['series-3', 'series-4', 'series-5', 'series-2'];
 
 let ws = null;
 let dirty = true;
 let colors = {};
-let view = null;  // world-to-screen transform of the last map draw
-
-// ---------------------------------------------------------------- connection
+let view = null;
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -92,7 +86,6 @@ function send(msg) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
-// Rows and drawn index of the robot selected for plots and readout.
 function selRows() {
   return state.selected ? (state.fleet[state.selected] || []) : state.samples;
 }
@@ -100,7 +93,6 @@ function selCursor() {
   return state.selected ? selRows().length - 1 : state.cursor;
 }
 
-// Fixed colour per robot: the one in samples is series-1, others follow in name order.
 const FLEET_COLORS = ['series-3', 'series-4', 'series-5'];
 function robotColor(name) {
   if (!name) return colors['series-1'];
@@ -146,7 +138,9 @@ function onMessage(msg) {
     if (msg.path) state.path = msg.path;
     if (msg.initial) state.initial = msg.initial;
     if (msg.polytope) state.polytope = msg.polytope;
+    if (msg.adaptive) state.adaptive = msg.adaptive;
     syncInputs();
+    syncAdaptive();
   } else if (msg.type === 'samples') {
     onSamples(msg);
   } else if (msg.type === 'fleet') {
@@ -184,8 +178,6 @@ function onSamples(msg) {
   }
   $('scrub').max = Math.max(0, state.samples.length - 1);
 }
-
-// ------------------------------------------------------------------ playback
 
 function startPlayback() {
   const speed = Number($('speed').value);
@@ -231,8 +223,6 @@ $('scrub').addEventListener('input', (ev) => {
   dirty = true;
 });
 
-// ------------------------------------------------------------------ controls
-
 $('start').addEventListener('click', () => {
   if ($('init-random-on-start').checked && state.canSetPose) randomInitial();
   send({ type: 'start' });
@@ -257,7 +247,6 @@ function sendInitial() {
 }
 for (const id of ['init-x', 'init-y', 'init-th']) $(id).addEventListener('change', sendInitial);
 
-// Random pose with x, y >= 0 inside the middle 80% of the current map view, then reset to it.
 function randomInitial() {
   const r = () => (Math.random() - 0.5) * 0.8 * camera.span;
   $('init-x').value = +Math.max(0, camera.cx + r()).toFixed(2);
@@ -268,16 +257,84 @@ function randomInitial() {
 }
 $('init-random').addEventListener('click', randomInitial);
 
-// "random on Start" is remembered per browser. It defaults to on.
 try { $('init-random-on-start').checked = localStorage.getItem('camslab-random-on-start') !== 'false'; }
 catch (err) { $('init-random-on-start').checked = true; }
 $('init-random-on-start').addEventListener('change', (ev) => {
-  try { localStorage.setItem('camslab-random-on-start', String(ev.target.checked)); } catch (err) { /* ignore */ }
+  try { localStorage.setItem('camslab-random-on-start', String(ev.target.checked)); } catch (err) { }
 });
 
 function setValue(input, value) {
   if (document.activeElement !== input) input.value = value;
 }
+
+function fillSelect(select, values, labels = {}) {
+  const want = values.join('\n');
+  if (select.dataset.values === want) return;
+  select.dataset.values = want;
+  select.replaceChildren(...values.map((v) => {
+    const option = document.createElement('option');
+    option.value = v;
+    option.textContent = labels[v] || v;
+    return option;
+  }));
+}
+
+function syncEstimatePlots(fields, truth) {
+  const plot = plots[plots.length - 1];
+  $('estimates-figure').hidden = fields.length === 0;
+  const names = fields.map((f) => f.replace(/_hat$/, ''));
+  const color = (i) => colors[ESTIMATE_COLORS[i % ESTIMATE_COLORS.length]];
+  plot.series = () => names.map((name, i) => ({ col: FIELDS.length + i, color: color(i) }));
+  plot.refs = () => {
+    if (!truth) return [];
+    const groups = [];
+    names.forEach((name, i) => {
+      const same = groups.find((g) => Math.abs(g.value - truth[i]) < 1e-9);
+      if (same) { same.names.push(name); same.color = colors['text-muted']; }
+      else groups.push({ value: truth[i], names: [name], color: color(i) });
+    });
+    return groups.map((g) => ({ value: g.value, label: `${g.names.join(', ')} true`,
+      color: g.color }));
+  };
+  const legend = $('estimate-legend');
+  if (legend.dataset.fields !== names.join(',')) {
+    legend.dataset.fields = names.join(',');
+    legend.replaceChildren(...names.map((name, i) => {
+      const key = document.createElement('span');
+      key.className = 'key';
+      const swatch = document.createElement('span');
+      swatch.className = 'swatch';
+      swatch.dataset.index = i;
+      key.append(swatch, name);
+      return key;
+    }));
+  }
+  for (const swatch of legend.querySelectorAll('.swatch')) {
+    swatch.style.background = color(+swatch.dataset.index);
+  }
+}
+
+function syncAdaptive() {
+  const a = state.adaptive;
+  $('adaptive-set').hidden = !a;
+  if (!a) return;
+  fillSelect($('adaptive-estimator'), [''].concat(a.choices), { '': 'none' });
+  fillSelect($('adaptive-mode'), a.modes,
+    { open: 'open loop: track the true path', closed: 'closed loop: track the estimate' });
+  setValue($('adaptive-estimator'), a.estimator);
+  setValue($('adaptive-mode'), a.mode);
+  $('adaptive-estimator').disabled = !a.editable;
+  $('adaptive-mode').disabled = !a.editable;
+  $('adaptive-info').textContent = a.error || '';
+  syncEstimatePlots(a.error ? [] : a.fields, a.truth);
+}
+
+$('adaptive-estimator').addEventListener('change', (ev) => {
+  send({ type: 'set_params', params: { estimator: ev.target.value } });
+});
+$('adaptive-mode').addEventListener('change', (ev) => {
+  send({ type: 'set_params', params: { adaptive_mode: ev.target.value } });
+});
 
 $('shape').addEventListener('change', (ev) => {
   state.params.shape = ev.target.value;
@@ -285,8 +342,6 @@ $('shape').addEventListener('change', (ev) => {
   syncSpline();
 });
 
-// Random position, heading and size of the selected shape, inside the 0 to 6 m area and
-// within kappa_max and w_max. The backend picks and checks the values.
 $('traj-random').addEventListener('click', () => send({ type: 'randomize_trajectory' }));
 
 function syncInputs() {
@@ -327,10 +382,6 @@ function syncInputs() {
   }
 }
 
-// ----------------------------------------------------------- safety polytope
-
-// Counter-clockwise convex hull of [[x, y], ...] (Andrew's monotone chain), the same as
-// convex_hull() in polytope.py, which the bridge applies. Shows the area before Apply.
 function convexHull(points) {
   const pts = [...new Map(points.map((p) => [p.join(','), p])).values()]
     .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -412,16 +463,11 @@ $('poly-margin').addEventListener('change', () => {
   const v = parseFloat($('poly-margin').value);
   if (Number.isFinite(v) && v >= 0) state.polytope.margin = v;
 });
-// Applies the draft, or the current corners with a new margin when not editing. Editing
-// stays on, so a rejected polytope can be fixed and applied again.
 $('poly-apply').addEventListener('click', () => {
   const points = polyDraft ? convexHull(polyDraft) : state.polytope.points;
   send({ type: 'set_polytope', points, margin: state.polytope.margin });
 });
 
-// ------------------------------------------------------- spline control points
-
-// Applied control points as [[x, y], ...], from the flat control_points parameter.
 function splinePoints() {
   const xy = state.params.control_points;
   if (!Array.isArray(xy)) return [];
@@ -438,14 +484,12 @@ function setSplineEditing(on) {
   syncSpline();
 }
 
-// Saves the draft for Undo, then changes it with edit(draft).
 function editSpline(edit) {
   splineHistory.push(splineDraft.map((p) => [...p]));
   edit(splineDraft);
   syncSpline();
 }
 
-// Distance from (x, y) to the segment from a to b [m].
 function segmentDistance(x, y, a, b) {
   const dx = b[0] - a[0], dy = b[1] - a[1];
   const len2 = dx * dx + dy * dy;
@@ -453,8 +497,6 @@ function segmentDistance(x, y, a, b) {
   return Math.hypot(x - a[0] - s * dx, y - a[1] - s * dy);
 }
 
-// Adds (x, y) into the edge of the closed control polygon nearest to it, so a click
-// between two points goes between them in path order. With fewer than 3 points it goes last.
 function addSplinePoint(x, y) {
   editSpline((pts) => {
     let at = pts.length, best = Infinity;
@@ -468,7 +510,6 @@ function addSplinePoint(x, y) {
   });
 }
 
-// Index of the draft point within PICK_RADIUS pixels of (px, py), or -1.
 function pickSplinePoint(px, py) {
   if (!splineDraft || !view) return -1;
   let best = -1, bestD = PICK_RADIUS * PICK_RADIUS;
@@ -510,7 +551,6 @@ $('spline-clear').addEventListener('click', () => {
   if (!splineDraft) setSplineEditing(true);
   editSpline((pts) => { pts.length = 0; });
 });
-// Sends the draft. Editing stays on, so a rejected spline can be fixed and applied again.
 $('spline-apply').addEventListener('click', () => {
   if (!splineDraft) return;
   if (splineDraft.length < SPLINE_MIN_POINTS) {
@@ -521,7 +561,8 @@ $('spline-apply').addEventListener('click', () => {
 });
 
 $('csv').addEventListener('click', () => {
-  const lines = [FIELDS.join(',')];
+  const extra = state.adaptive && !state.adaptive.error ? state.adaptive.fields : [];
+  const lines = [FIELDS.concat(extra).join(',')];
   for (const row of selRows()) lines.push(row.join(','));
   const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/csv' });
   const a = document.createElement('a');
@@ -530,8 +571,6 @@ $('csv').addEventListener('click', () => {
   a.click();
   URL.revokeObjectURL(a.href);
 });
-
-// ------------------------------------------------------------ canvas helpers
 
 function readColors() {
   const css = getComputedStyle(document.documentElement);
@@ -573,13 +612,8 @@ function formatTick(value, step) {
   return value.toFixed(Math.min(digits, 6));
 }
 
-// ----------------------------------------------------------------------- map
-
-// The map view is fixed. It changes only on wheel zoom, drag pan, or the Fit button.
-// span is the length of the shorter canvas side [m]. While corner is true, the centre
-// (cx, cy) is derived so that the origin sits at the bottom-left corner of the map.
 const DEFAULT_CAMERA = { cx: 0, cy: 0, span: 6, corner: true };
-const CORNER_INSET = 0.08;  // fraction of span left outside the origin for labels
+const CORNER_INSET = 0.08;
 const camera = loadCamera();
 
 function loadCamera() {
@@ -588,17 +622,17 @@ function loadCamera() {
     if (saved && [saved.cx, saved.cy, saved.span].every(Number.isFinite) && saved.span > 0) {
       return saved;
     }
-  } catch (err) { /* storage blocked or empty */ }
+  } catch (err) { }
   return { ...DEFAULT_CAMERA };
 }
 
 function saveCamera() {
-  try { localStorage.setItem('camslab-camera-v2', JSON.stringify(camera)); } catch (err) { /* ignore */ }
+  try { localStorage.setItem('camslab-camera-v2', JSON.stringify(camera)); } catch (err) { }
   dirty = true;
 }
 
 function fitCamera() {
-  let x0 = 0, x1 = 0, y0 = 0, y1 = 0;  // the origin stays in view
+  let x0 = 0, x1 = 0, y0 = 0, y1 = 0;
   const include = (x, y) => {
     x0 = Math.min(x0, x); x1 = Math.max(x1, x);
     y0 = Math.min(y0, y); y1 = Math.max(y1, y);
@@ -659,7 +693,6 @@ function drawGrid(ctx, w, h) {
     ctx.textAlign = 'left';
     ctx.fillText(formatTick(y, step), 4, py - 3);
   }
-  // Global frame axes.
   const ox = view.sx(0), oy = view.sy(0), len = step * view.scale;
   ctx.strokeStyle = colors['text-secondary'];
   ctx.fillStyle = colors['text-secondary'];
@@ -671,8 +704,6 @@ function drawGrid(ctx, w, h) {
   ctx.fillText('y_g', ox + 4, oy - len - 4);
 }
 
-// Reference path p*(t), solid. The path covers [0, t_max], often more than one lap, and
-// dashes on overlapping laps would fall out of step and look uneven.
 function drawPath(ctx) {
   if (state.path.length < 2) return;
   ctx.strokeStyle = colors['series-2'];
@@ -686,7 +717,37 @@ function drawPath(ctx) {
   ctx.stroke();
 }
 
-// Safety polytope: the applied one solid, the one being edited dashed with its corners.
+function estimatedCircle(row) {
+  const a = state.adaptive;
+  if (!a || a.error || !row) return null;
+  const at = (name) => {
+    const i = a.fields.indexOf(name + '_hat');
+    return i < 0 ? NaN : row[FIELDS.length + i];
+  };
+  const r = at('r'), cx = at('c_x'), cy = at('c_y');
+  return [r, cx, cy].every(Number.isFinite) ? { r: Math.abs(r), cx, cy } : null;
+}
+
+function drawEstimatedCircle(ctx, row) {
+  const c = estimatedCircle(row);
+  if (!c) return;
+  const radius = Math.abs(view.sx(c.cx + c.r) - view.sx(c.cx));
+  const x = view.sx(c.cx), y = view.sy(c.cy);
+  ctx.strokeStyle = colors['series-3'];
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([6, 4]);
+  ctx.beginPath(); ctx.arc(x, y, radius, 0, 2 * Math.PI); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(x - 5, y); ctx.lineTo(x + 5, y);
+  ctx.moveTo(x, y - 5); ctx.lineTo(x, y + 5);
+  ctx.stroke();
+  ctx.fillStyle = colors['series-3'];
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('estimate', x + 7, y - 7);
+}
+
 function drawPolytope(ctx) {
   const outline = (poly) => {
     ctx.beginPath();
@@ -726,8 +787,6 @@ function drawPolytope(ctx) {
   });
 }
 
-// Spline control polygon, dashed: the applied one faint, the one being edited with its
-// numbered points.
 function drawSpline(ctx) {
   if (state.params.shape !== 'spline') return;
   const pts = splineDraft || splinePoints();
@@ -756,7 +815,6 @@ function drawSpline(ctx) {
   ctx.globalAlpha = 1;
 }
 
-// Cross at the reference p* of a sample row, labelled p* or p*<name>.
 function drawReference(ctx, row, color, label) {
   if (!row || row[XR] === null || row[XR] === undefined) return;
   const gx = view.sx(row[XR]), gy = view.sy(row[YR]);
@@ -797,7 +855,7 @@ function drawRobot(ctx, x, y, qx, qy, ghost, color = colors['series-1'], label =
   const wid = len * (ROBOT_WIDTH / ROBOT_LENGTH);
   ctx.save();
   ctx.translate(view.sx(x), view.sy(y));
-  ctx.rotate(-Math.atan2(qy, qx));  // screen y points down
+  ctx.rotate(-Math.atan2(qy, qx));
   ctx.lineWidth = 2;
   if (ghost) {
     ctx.strokeStyle = colors['text-muted'];
@@ -812,7 +870,6 @@ function drawRobot(ctx, x, y, qx, qy, ghost, color = colors['series-1'], label =
     ctx.rect(-len / 2, -wid / 2, len, wid);
     ctx.fill();
     ctx.stroke();
-    // Robot frame axes: x_r forward, y_r to the left.
     ctx.strokeStyle = colors['text-primary'];
     ctx.lineWidth = 1.5;
     drawArrow(ctx, 0, 0, len * 1.1, 0);
@@ -827,7 +884,6 @@ function drawRobot(ctx, x, y, qx, qy, ghost, color = colors['series-1'], label =
   }
 }
 
-// Other robots: trail, latest pose, and reference p*, in its own colour.
 function drawFleet(ctx) {
   for (const name of Object.keys(state.fleet).sort()) {
     const trail = state.fleet[name];
@@ -848,6 +904,9 @@ function drawWorld() {
   drawSpline(ctx);
   drawPath(ctx);
   const n = state.samples.length;
+  const sel = selRows();
+  if (state.hover >= 0 && state.hover < sel.length) drawEstimatedCircle(ctx, sel[state.hover]);
+  else if (n > 0 && state.cursor >= 0) drawEstimatedCircle(ctx, state.samples[state.cursor]);
   if (state.initial && state.canSetPose) {
     const th = state.initial.theta;
     drawRobot(ctx, state.initial.x, state.initial.y, Math.cos(th), Math.sin(th), true);
@@ -859,7 +918,6 @@ function drawWorld() {
     const s = state.samples[state.cursor];
     drawRobot(ctx, s[X], s[Y], s[QX], s[QY], false, colors['series-1'], state.robotName || null);
   }
-  const sel = selRows();
   if (state.hover >= 0 && state.hover < sel.length) {
     const s = sel[state.hover];
     ctx.strokeStyle = colors['text-primary'];
@@ -871,8 +929,6 @@ function drawWorld() {
   if (n > 0 && state.cursor >= 0) drawReference(ctx, state.samples[state.cursor], colors['series-2'], 'p*');
 }
 
-// A drag longer than 4 px pans the view. While editing the spline, a drag that starts on
-// a control point moves that point instead (drag.point is its index).
 let drag = null;
 const snap = (v) => +(Math.round(v / POLY_SNAP) * POLY_SNAP).toFixed(3);
 
@@ -889,7 +945,6 @@ world.addEventListener('pointerdown', (ev) => {
   world.setPointerCapture(ev.pointerId);
 });
 
-// A click without a pan adds a safety polytope corner or a spline point while editing.
 world.addEventListener('pointerup', (ev) => {
   if (!drag) return;
   if (drag.point === null && !drag.panning) {
@@ -913,7 +968,6 @@ world.addEventListener('wheel', (ev) => {
   const factor = Math.exp(ev.deltaY * 0.0015);
   const span = Math.min(Math.max(camera.span * factor, 0.5), 200);
   const k = span / camera.span;
-  // Keep the world point under the pointer fixed.
   camera.cx = wx + (camera.cx - wx) * k;
   camera.cy = wy + (camera.cy - wy) * k;
   camera.span = span;
@@ -930,7 +984,7 @@ $('view-reset').addEventListener('click', () => {
 world.addEventListener('pointermove', (ev) => {
   if (!view) return;
   if (drag && drag.point !== null) {
-    if (!drag.panning) {  // first move: save the draft for Undo
+    if (!drag.panning) {
       splineHistory.push(splineDraft.map((p) => [...p]));
       drag.panning = true;
     }
@@ -963,8 +1017,6 @@ world.addEventListener('pointermove', (ev) => {
 });
 world.addEventListener('pointerleave', () => setHover(-1));
 
-// --------------------------------------------------------------------- plots
-
 const PLOT_MARGIN = { left: 46, right: 12, top: 8, bottom: 18 };
 
 function timeRange() {
@@ -975,16 +1027,23 @@ function timeRange() {
 }
 
 function drawPlot(plot) {
+  if (plot.canvas.offsetParent === null) return;
   const { ctx, w, h } = fitCanvas(plot.canvas);
   const m = PLOT_MARGIN;
   const pw = w - m.left - m.right, ph = h - m.top - m.bottom;
   const s = selRows();
-  const color = robotColor(state.selected);
+  const robot = robotColor(state.selected);
   const refs = plot.refs();
+  const series = plot.series ? plot.series() : [{ col: plot.col, color: robot }];
+  const has = (row, col) => Number.isFinite(row[col]);
 
   let lo = 0, hi = 0;
-  for (const row of s) { lo = Math.min(lo, row[plot.col]); hi = Math.max(hi, row[plot.col]); }
-  for (const r of refs) hi = Math.max(hi, r.value * 1.15);
+  for (const { col } of series) {
+    for (const row of s) {
+      if (has(row, col)) { lo = Math.min(lo, row[col]); hi = Math.max(hi, row[col]); }
+    }
+  }
+  for (const r of refs) { hi = Math.max(hi, r.value * 1.15); lo = Math.min(lo, r.value * 1.15); }
   if (hi - lo < 1e-9) { hi = lo + 1; }
   const pad = (hi - lo) * 0.08;
   hi += pad;
@@ -1013,7 +1072,7 @@ function drawPlot(plot) {
 
   for (const r of refs) {
     const y = Math.round(py(r.value)) + 0.5;
-    ctx.strokeStyle = colors['series-2'];
+    ctx.strokeStyle = r.color || colors['series-2'];
     ctx.setLineDash([5, 4]);
     ctx.beginPath(); ctx.moveTo(m.left, y); ctx.lineTo(w - m.right, y); ctx.stroke();
     ctx.setLineDash([]);
@@ -1022,15 +1081,18 @@ function drawPlot(plot) {
     ctx.fillText(r.label, w - m.right - 2, y - 3);
   }
 
-  if (s.length > 0) {
+  for (const { col, color } of series) {
     ctx.strokeStyle = color;
     ctx.lineWidth = 2;
     ctx.lineJoin = 'round';
     ctx.beginPath();
-    s.forEach((row, i) => {
-      if (i === 0) ctx.moveTo(px(row[T]), py(row[plot.col]));
-      else ctx.lineTo(px(row[T]), py(row[plot.col]));
-    });
+    let drawing = false;
+    for (const row of s) {
+      if (!has(row, col)) { drawing = false; continue; }
+      if (!drawing) ctx.moveTo(px(row[T]), py(row[col]));
+      else ctx.lineTo(px(row[T]), py(row[col]));
+      drawing = true;
+    }
     ctx.stroke();
   }
 
@@ -1041,10 +1103,13 @@ function drawPlot(plot) {
     ctx.strokeStyle = lineColor;
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(x, m.top); ctx.lineTo(x, m.top + ph); ctx.stroke();
-    ctx.fillStyle = color;
-    ctx.strokeStyle = colors.surface;
-    ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(x, py(row[plot.col]), 4, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+    for (const { col, color } of series) {
+      if (!has(row, col)) continue;
+      ctx.fillStyle = color;
+      ctx.strokeStyle = colors.surface;
+      ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(x, py(row[col]), 4, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+    }
   };
   if (state.mode === 'batch') mark(selCursor(), colors.border);
   mark(state.hover, colors['text-secondary']);
@@ -1066,14 +1131,13 @@ function nearestIndex(t) {
   return Math.abs(s[lo][T] - t) <= Math.abs(s[hi][T] - t) ? lo : hi;
 }
 
-for (const plot of plots) {
+function addPlotListeners(plot) {
   plot.canvas.addEventListener('pointermove', (ev) => {
     if (plot.invert) setHover(nearestIndex(plot.invert(ev.clientX)), ev);
   });
   plot.canvas.addEventListener('pointerleave', () => setHover(-1));
 }
-
-// ------------------------------------------------------- hover and readouts
+for (const plot of plots) addPlotListeners(plot);
 
 function setHover(index, ev) {
   state.hover = index;
@@ -1089,6 +1153,13 @@ function setHover(index, ev) {
       ['ω', fixed(s[W], 3) + ' rad/s'],
       ['x, y', fixed(s[X], 3) + ', ' + fixed(s[Y], 3)],
     ];
+    const a = state.adaptive;
+    if (a && !a.error) {
+      a.fields.forEach((name, i) => {
+        const v = s[FIELDS.length + i];
+        if (Number.isFinite(v)) rows.push([name, fixed(v, 3)]);
+      });
+    }
     tip.replaceChildren(...rows.map(([name, value]) => {
       const row = document.createElement('div');
       row.className = 'row';
@@ -1121,8 +1192,6 @@ function updateReadout() {
   set('r-v', fixed(s[V], 3) + ' m/s');
   set('r-w', fixed(s[W], 3) + ' rad/s');
 }
-
-// ---------------------------------------------------------------- main loop
 
 function frame(now) {
   if (state.playing) {

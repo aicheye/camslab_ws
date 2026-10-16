@@ -1,0 +1,30 @@
+[project]
+name = "camslab-offline"
+version = "0.1.0"
+description = "Offline experiments: trajectory tracking, mass-spring-damper estimation, circular path identification."
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "camslab",
+    "camslab-webui",
+]
+
+[dependency-groups]
+dev = ["pytest"]
+
+[tool.uv.sources]
+camslab = { path = "../camslab", editable = true }
+camslab-webui = { path = "../camslab_webui", editable = true }
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["camslab_offline*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"

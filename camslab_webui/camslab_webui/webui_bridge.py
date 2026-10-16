@@ -1,27 +1,4 @@
-"""Web UI backend for the Gazebo robots. Streams ROS 2 topics to the browser.
-
-Per robot <name>, subscribes /<name>/pose (geometry_msgs/PoseStamped),
-/<name>/cmd_vel (geometry_msgs/Twist), /<name>/ref_pose (geometry_msgs/PoseStamped),
-and for the first robot /<name>/ref_path (nav_msgs/Path), drawn on the map.
-Calls:      /<name>/controller/enable, set_parameters, set_parameters_atomically,
-            get_parameters
-
-`robot_name` is the robot in "samples", which the plots show by default. `others` lists
-the other robots, streamed as "fleet" messages. Start and Stop enable and disable every
-controller, and parameters set in the UI go to every controller, since all of them track
-the same trajectory. The Random button sends random trajectory parameters inside the
-area (random_trajectory.py) to the first controller atomically, tries another set when the
-controller warns that one breaks its kappa_max or w_max, and copies the last set to the
-others. A controller accepts a trajectory past those limits and returns the warning as the
-reason of the successful change; the UI shows it.
-
-The safety polytope editor sends corners; the bridge sets the convex hull of them
-(polytope.py) as `polytope` and `polytope_margin` on the first controller, and once it
-accepts them, on the others, and writes them to `polytope_file` so the next launch loads
-them. No corners removes the polytope and deletes the file.
-
-rclpy spins in a background thread. aiohttp runs in the main thread.
-"""
+"""Web UI backend for the Gazebo robots."""
 
 import logging
 import math
@@ -35,22 +12,19 @@ from rcl_interfaces.srv import GetParameters, SetParameters, SetParametersAtomic
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.signals import SignalHandlerOptions
-from std_srvs.srv import SetBool
+from std_msgs.msg import Float64MultiArray
+from std_srvs.srv import SetBool, Trigger
 
 from .polytope import convex_hull, write_file
 from .random_trajectory import random_params
-from .server import Backend, UiServer, fleet_msg, hello_msg, samples_msg, status_msg
+from .server import (Backend, UiServer, adaptive_config, fleet_msg, hello_msg, samples_msg,
+                     status_msg)
 
-# Controller parameters shown in the UI. shape is a string, control_points a double array
-# [x0, y0, x1, y1, ...], the rest are doubles.
 PARAM_NAMES = ["shape", "x0", "y0", "theta0", "circle_speed", "kappa", "a", "b", "period",
                "phi0", "control_points", "k_par", "k_perp", "k_q", "kappa_max", "w_max",
                "v_max", "t_max"]
-# Controller parameters of the safety polytope editor, fetched with PARAM_NAMES.
 POLYTOPE_NAMES = ["polytope", "polytope_margin"]
 MAX_SAMPLES = 20000
-# Poses arrive every 10 ms, so a sample due at 40 ms can read as 39.99 ms after float
-# rounding. Accepting 5 ms early keeps 25 Hz from dropping to 20 Hz.
 SAMPLE_SLACK = 0.005
 RANDOM_TRIES = 50
 
@@ -87,11 +61,10 @@ class Robot:
         self.last_sample = -math.inf
         self.last_pose = None
         self.cmd = (0.0, 0.0)
-        self.ref = None  # [x, y] of p*
+        self.ref = None
 
 
 class WebuiBridgeNode(Node, Backend):
-    # The Backend method is on_message because rclpy.node.Node already defines "handle".
     def __init__(self):
         super().__init__("webui_bridge")
         self.label = self.declare_parameter("backend_label", "Gazebo").value
@@ -101,8 +74,12 @@ class WebuiBridgeNode(Node, Backend):
         host = self.declare_parameter("host", "0.0.0.0").value
         port = self.declare_parameter("port", 8000).value
         sample_rate = self.declare_parameter("sample_rate", 25.0).value
-        # Where the safety polytope is saved; empty applies it without saving.
         self.polytope_file = self.declare_parameter("polytope_file", "").value
+        self.estimator = self.declare_parameter("estimator", "").value
+        self.adaptive_mode = self.declare_parameter("adaptive_mode", "open").value
+        self.estimate_names = []
+        self.estimate = None
+        self.estimate_truth = None
         self.sample_period = 1.0 / sample_rate
 
         self.lock = threading.Lock()
@@ -111,8 +88,7 @@ class WebuiBridgeNode(Node, Backend):
         self.t0 = None
         self.path = []
         self.params = {}
-        self.polytope = {"points": [], "margin": 0.2}  # as the first controller has it
-        # Must match the controllers' start_enabled, so the UI status is right before Start.
+        self.polytope = {"points": [], "margin": 0.2}
         self.enabled = self.declare_parameter("start_enabled", False).value
         self.status = status_msg("idle")
 
@@ -136,6 +112,15 @@ class WebuiBridgeNode(Node, Backend):
         self.create_subscription(
             Path, f"/{self.robot_name}/ref_path", self.on_path,
             QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        self.reset_client = None
+        if self.estimator:
+            self.create_subscription(
+                Float64MultiArray, f"/{self.robot_name}/estimate", self.on_estimate, 10)
+            self.create_subscription(
+                Float64MultiArray, f"/{self.robot_name}/estimate_true", self.on_estimate_truth,
+                QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+            self.reset_client = self.create_client(
+                Trigger, f"/{self.robot_name}/estimator/reset")
         self.set_params_clients = [
             self.create_client(SetParameters, f"/{name}/controller/set_parameters")
             for name in self.robots]
@@ -148,7 +133,6 @@ class WebuiBridgeNode(Node, Backend):
         self.create_timer(0.2, self.on_status_timer)
         self.create_timer(1.0, self.fetch_params)
 
-    # ------------------------------------------------------------ ROS thread
 
     def now(self):
         return self.get_clock().now().nanoseconds * 1e-9
@@ -156,6 +140,26 @@ class WebuiBridgeNode(Node, Backend):
     def on_path(self, msg):
         with self.lock:
             self.path = [[p.pose.position.x, p.pose.position.y] for p in msg.poses]
+        self.server.broadcast_threadsafe(self.config_msg())
+
+    @staticmethod
+    def names_of(msg):
+        return msg.layout.dim[0].label.split(",") if msg.layout.dim else []
+
+    def on_estimate(self, msg):
+        names = self.names_of(msg)
+        with self.lock:
+            self.estimate = list(msg.data)
+            changed = names != self.estimate_names
+            self.estimate_names = names
+        if changed:
+            self.server.broadcast_threadsafe(self.config_msg())
+
+    def on_estimate_truth(self, msg):
+        with self.lock:
+            self.estimate_truth = list(msg.data)
+            if not self.estimate_names:
+                self.estimate_names = self.names_of(msg)
         self.server.broadcast_threadsafe(self.config_msg())
 
     def on_pose(self, robot, msg):
@@ -169,11 +173,13 @@ class WebuiBridgeNode(Node, Backend):
         x, y = pose[0], pose[1]
         ref = robot.ref
         dist = math.hypot(ref[0] - x, ref[1] - y) if ref else 0.0
-        xr, yr = ref if ref else (None, None)  # null in JSON
+        xr, yr = ref if ref else (None, None)
         with self.lock:
             if self.t0 is None:
                 self.t0 = now
             row = [now - self.t0, *pose, robot.cmd[0], robot.cmd[1], dist, xr, yr]
+            if robot is self.main and self.estimator:
+                row += self.estimate or [None] * len(self.estimate_names)
             robot.rows.append(row)
             del robot.rows[:-MAX_SAMPLES]
         robot.last_sample = now
@@ -220,20 +226,25 @@ class WebuiBridgeNode(Node, Backend):
                     self.params[name] = value.string_value
         self.server.broadcast_threadsafe(self.config_msg())
 
-    # -------------------------------------------------------- asyncio thread
 
     def config_msg(self):
         with self.lock:
+            adaptive = None
+            if self.estimator:
+                adaptive = adaptive_config(
+                    self.estimator, self.adaptive_mode, [self.estimator], [self.adaptive_mode],
+                    [n + "_hat" for n in self.estimate_names], self.estimate_truth,
+                    editable=False)
             return {"type": "config", "params": dict(self.params), "path": list(self.path),
                     "initial": None,
-                    "polytope": {**self.polytope, "file": self.polytope_file}}
+                    "polytope": {**self.polytope, "file": self.polytope_file},
+                    "adaptive": adaptive}
 
     def on_connect(self):
         with self.lock:
             samples = list(self.main.rows)
             fleet = {r.name: list(r.rows) for r in self.robots.values() if r is not self.main}
             status = self.status
-        # Robots spawn where the fleet file says, so the UI has no initial-pose controls.
         return [hello_msg(self.label, "live", False, self.robot_name, can_set_polytope=True),
                 self.config_msg(),
                 samples_msg(samples, reset=True), fleet_msg(fleet, reset=True), status]
@@ -247,6 +258,7 @@ class WebuiBridgeNode(Node, Backend):
         elif kind == "set_polytope":
             self.set_polytope(msg["points"], float(msg["margin"]))
         elif kind == "start":
+            self.reset_estimator()
             self.set_enabled(True)
         elif kind == "stop":
             self.set_enabled(False)
@@ -258,6 +270,16 @@ class WebuiBridgeNode(Node, Backend):
                 self.t0 = None
             await self.server.broadcast(samples_msg([], reset=True))
             await self.server.broadcast(fleet_msg({}, reset=True))
+
+    def reset_estimator(self):
+        if self.reset_client is None:
+            return
+        if not self.reset_client.service_is_ready():
+            self.report_error(f"{self.reset_client.srv_name} is not available")
+            return
+        with self.lock:
+            self.estimate = None
+        self.reset_client.call_async(Trigger.Request())
 
     def set_enabled(self, enabled):
         for i, client in enumerate(self.enable_clients):
@@ -397,7 +419,6 @@ class WebuiBridgeNode(Node, Backend):
 
 def main(args=None):
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
-    # aiohttp handles SIGINT and SIGTERM. rclpy is shut down after the server exits.
     rclpy.init(args=args, signal_handler_options=SignalHandlerOptions.NO)
     node = WebuiBridgeNode()
     threading.Thread(target=rclpy.spin, args=(node,), daemon=True).start()

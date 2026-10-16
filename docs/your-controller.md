@@ -1,25 +1,21 @@
 # Modify the controller
 
-Modify `control()` to change the built-in C++ controller while keeping the existing
+Modify `control()` to change the built-in controller while keeping the existing
 reference, command limits, pose timeout, and safety-polytope checks.
 
-For a different language or additional sensor data, use a {doc}`custom-node` instead.
+For additional sensor data or a separate process, use a {doc}`custom-node` instead.
 
 ## Controller interface
 
-At 50 Hz, the node gets the latest pose, evaluates the reference, and calls:
+At 50 Hz, the controller node gets the latest pose, evaluates the reference, and calls
+`control()` from `camslab/camslab/controller.py`:
 
-```cpp
-Command control(const State & state, const Reference & ref, const Params & params);
+```{literalinclude} ../camslab/camslab/controller.py
+:language: python
+:start-at: "def control("
 ```
 
-The implementation is in `camslab/src/controller.cpp`:
-
-```{literalinclude} ../camslab/src/controller.cpp
-:language: cpp
-:start-at: "Command control("
-:end-before: "}  // namespace camslab"
-```
+The offline simulator (`camslab_offline.tracking`) calls the same function.
 
 ### Inputs and output
 
@@ -33,54 +29,42 @@ The implementation is in `camslab/src/controller.cpp`:
 | `ref.w` | $\omega^*$ | path turning rate | rad/s |
 | `ref.kappa` | $\kappa^*$ | path curvature, $\omega^* = \kappa^* v^*$ | 1/m |
 | `params.k_par`, `params.k_perp`, `params.k_q` | $k_\parallel, k_\perp, k_q$ | controller gains | |
-| return `{v, w}` | $v, \omega$ | forward speed and turning rate | m/s, rad/s |
+| return `(v, w)` | $v, \omega$ | forward speed and turning rate | m/s, rad/s |
 
-`Params` also contains path parameters and the limits `v_max`, `w_max`, and `kappa_max`.
-Read `camslab/include/camslab/types.hpp` for the complete definitions.
+`p`, `q`, `ref.p` and `ref.q` are NumPy arrays of shape `(2,)`. `Params` also contains the
+path parameters and the limits `v_max`, `w_max`, and `kappa_max`. Read
+`camslab/camslab/types.py` for the complete definitions.
 
-### Vector helpers
-
-Use the `Vec2` and `Mat2` helpers from `types.hpp`:
-
-| Code | Maths |
-|---|---|
-| `a + b`, `a - b`, `s * a`, `a / s` | vector sum, difference, and scaling |
-| `Vec2::dot(a, b)` | $\langle a, b \rangle$ |
-| `a.norm()` | $\lVert a \rVert$ |
-| `Mat2 S{0, -1, 1, 0}` | rotation by +90° |
-| `Mat2::dot(S, a)` | $S a$ |
-| `std::atan2(q.y, q.x)` | heading angle $\theta$ |
-
-For $e = p^* - p$, calculate longitudinal error with $\langle e, q \rangle$ and lateral
-error with $\langle e, S q \rangle$.
+For $e = p^* - p$ and $S = [[0, -1], [1, 0]]$, calculate the longitudinal error with
+`e @ q` and the lateral error with `e @ (S @ q)`.
 
 ## Build and test
 
-1. Edit `camslab/src/controller.cpp`.
-2. Rebuild the package:
+1. Edit `camslab/camslab/controller.py`.
+2. Test it offline from `camslab_offline/`:
 
    ```bash
-   colcon build --symlink-install --packages-select camslab
+   uv run pytest tests/tracking
+   uv run python -m camslab_offline.tracking
    ```
 
-3. Restart the simulator ({doc}`running`).
+3. Restart the Gazebo simulator ({doc}`running`). With `colcon build --symlink-install`,
+   a Python change needs no rebuild.
 4. Press **Reset**, then **Start**. Check the tracking-error plot.
 
-Restore the original controller with `git checkout camslab/src/controller.cpp`, then
-rebuild.
+Restore the original controller with `git checkout camslab/camslab/controller.py`.
 
 ## Add a parameter
 
 Add a gain such as `k_i` in four places:
 
-1. Add `double k_i{0.5};` to `struct Params` in `camslab/include/camslab/types.hpp`.
-2. Add `{"k_i", &Params::k_i, false},` to `kParamFields` in
-   `camslab/src/controller_node.cpp`.
+1. Add `k_i: float = 0.5` to `Params` in `camslab/camslab/types.py`.
+2. Add `"k_i"` to `GAIN_FIELDS` in `camslab/camslab/controller_node.py`.
 3. Add `k_i: 0.5` under the gains in `camslab/config/params.yaml`.
 4. Add `"k_i"` to `PARAM_NAMES` in `camslab_webui/camslab_webui/webui_bridge.py` to show
    it in the web UI.
 
-Use `params.k_i` in `control()`. After rebuilding, change it at runtime:
+Use `params.k_i` in `control()`. Change it at runtime with:
 
 ```bash
 ros2 param set /angostura/controller k_i 1.0

@@ -1,10 +1,4 @@
-"""Settings files of gazebo_multi.launch.py (config/sim.yaml) and live.launch.py
-(config/live.yaml). Not a launch file: both import it from this directory.
-
-Every top-level value that is not a list or a mapping is also a launch argument, so
-`key:=value` on the command line overrides the file. The value is read as YAML, the same
-as in the file.
-"""
+"""Settings files of gazebo_multi.launch.py and live.launch.py."""
 
 import os
 import tempfile

@@ -1,11 +1,4 @@
-"""Safety polytope from the web UI: convex hull of the clicked corners, and the controller
-parameter file that keeps it across launches.
-
-The file sets `polytope` ([x1, y1, x2, y2, ...], counter-clockwise, map frame) and
-`polytope_margin` on every controller. robot.launch.py loads it after params.yaml when it
-exists. Motion capture coordinates move with every calibration, so the corners are data in
-this file and are set again in the web UI after a calibration.
-"""
+"""Safety polytope from the web UI: convex hull of the corners and its parameter file."""
 
 import datetime
 import os

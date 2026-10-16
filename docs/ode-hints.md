@@ -5,7 +5,7 @@ The plant is
     dp/dt = v q
     dq/dt = w S q,    S = [[0, -1], [1, 0]]
 
-`camslab_sim/simulate.py` samples the controller every `dt` and holds `v` and `w` constant
+`camslab_offline/camslab_offline/tracking/simulate.py` samples the controller every `dt` and holds `v` and `w` constant
 until the next sample (zero-order hold). This is also what the real robot does: the
 ROS controller publishes `cmd_vel` at 50 Hz and the car holds each command. So
 `step(state, v, w, dt)` only has to solve the ODE over one interval with constant inputs.
@@ -25,7 +25,7 @@ ROS controller publishes `cmd_vel` at 50 Hz and the car holds each command. So
    coefficients, so `q(t) = expm(w t S) q(0)`. Use `S^2 = -I` in the power series of the
    matrix exponential and see which familiar 2x2 matrix comes out. Then integrate
    `dp/dt = v q(t)` in closed form, and treat `w -> 0` as a separate case. This version
-   keeps `||q|| = 1` to machine precision and carries over to C++ with no library.
+   keeps `||q|| = 1` to machine precision and needs no library.
 
 ## Keeping `||q|| = 1`
 
@@ -40,11 +40,6 @@ For a linear error equation `de/dt = -k e`, forward Euler is stable only for
 reference to find the rates that play the role of `k` for the tracking law. The same
 limit applies to the 50 Hz rate of `controller`.
 
-## C++
-
-A hand-written RK4 or the exact solution needs only `<cmath>`. Boost.Odeint is the
-library option.
-
 ## Reading
 
 - SciPy `solve_ivp`: https://docs.scipy.org/doc/scipy/reference/generated/scipy.integrate.solve_ivp.html
@@ -54,7 +49,6 @@ library option.
   section 13.1.2, http://lavalle.pl/planning/
 - Norm-preserving integration: Hairer, Lubich, Wanner, *Geometric Numerical
   Integration*, chapter IV (the library has it)
-- Boost.Odeint: https://www.boost.org/doc/libs/release/libs/numeric/odeint/
 - Ackermann constraint (the Gazebo car): a car with wheelbase `L` and steering angle `delta`
   turns at `w = v tan(delta) / L`, so `|w| <= |v| tan(delta_max) / L` and `w` is zero
   when `v` is zero.

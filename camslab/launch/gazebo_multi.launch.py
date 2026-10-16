@@ -1,28 +1,4 @@
-"""Yahboom R2s tracking a reference trajectory in Gazebo Fortress, with RViz and the web UI.
-
-ROS 2 Humble with Gazebo Fortress, in docker/ or installed on the host (README.md).
-
-    ros2 launch camslab gazebo_multi.launch.py                       # config/sim.yaml
-    ros2 launch camslab gazebo_multi.launch.py gui:=true
-    ros2 launch camslab gazebo_multi.launch.py config:=/path/to/other.yaml
-
-config/sim.yaml lists the robots and the launch options (gui, rviz, webui, port,
-start_enabled); a launch argument with the same name overrides a value in it. Every
-robot's controller tracks the trajectory set in config/params.yaml (shape, x0, y0,
-theta0, ...), with sim.yaml `controller` on top. When config/polytope.yaml exists (the
-web UI saves it, see the `polytope` argument), every controller also keeps its reference
-path and its robot inside that safety polytope, and RViz draws it in red.
-
-This file starts the Gazebo world, the web UI, and RViz, and includes robot.launch.py
-once per robot with name:=<name>.
-
-RViz is the main view: it shows each robot, its ref_path, and its current ref_pose p*.
-The controllers start enabled, so each robot drives as soon as it has a pose.
-
-/webui_bridge (root namespace, webui: false to skip) plots the first robot in the fleet
-file and draws every robot. Its Start and Stop enable and disable every controller, which
-also restarts the trajectory clock, and Reset stops the controllers and clears the plots.
-"""
+"""Yahboom R2s tracking a reference trajectory in Gazebo Fortress, with RViz and the web UI."""
 
 import os
 import re
@@ -40,9 +16,8 @@ from launch.substitutions import EnvironmentVariable, LaunchConfiguration
 from launch_ros.actions import Node, SetParameter
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
-import camslab_settings  # noqa: E402
+import camslab_settings
 
-# Names a fleet file's `color` can use in place of [r, g, b].
 COLORS = {
     "green": [0, 0.63, 0.24],
     "red": [0.85, 0.15, 0.15],
@@ -52,8 +27,6 @@ COLORS = {
 }
 DEFAULT_COLOR = "green"
 
-# Gazebo transport ignores ROS_DOMAIN_ID, so sims in different domains on one network would
-# see each other's topics. The partition follows the domain unless IGN_PARTITION is set.
 def ign_partition():
     return SetEnvironmentVariable("IGN_PARTITION", EnvironmentVariable(
         "IGN_PARTITION",
@@ -64,7 +37,6 @@ def check_fleet(fleet, path):
     """Check the `robots` list of a settings file."""
     names = [r["name"] for r in fleet]
     for name in names:
-        # Valid as a ROS namespace, a Gazebo model name, and a TF prefix.
         if not re.fullmatch(r"[a-z][a-z0-9_]*", str(name)):
             raise RuntimeError(f"{path}: robot name {name!r} must match [a-z][a-z0-9_]*")
     if len(set(names)) != len(names):
@@ -167,6 +139,8 @@ def robots(context):
     start_enabled = bool(settings["start_enabled"])
     polytope = LaunchConfiguration("polytope").perform(context)
     controller = camslab_settings.controller_file(settings)
+    estimator = str(settings.get("estimator") or "")
+    adaptive_mode = str(settings.get("adaptive_mode") or "open")
 
     gz_args = f"-r -s {world}" if not gui else f"-r --gui-config {gui_config} {world}"
     actions = [IncludeLaunchDescription(
@@ -174,7 +148,6 @@ def robots(context):
             os.path.join(get_package_share_directory("ros_gz_sim"), "launch", "gz_sim.launch.py")),
         launch_arguments={"gz_args": gz_args}.items())]
 
-    # Simulation time for every node, from Gazebo's clock.
     actions.append(Node(package="ros_gz_bridge", executable="parameter_bridge",
                         name="clock_bridge", output="log",
                         arguments=["/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock"]))
@@ -189,6 +162,8 @@ def robots(context):
                               "controller": controller,
                               "polytope": polytope,
                               "start_enabled": str(start_enabled).lower(),
+                              "estimator": estimator,
+                              "adaptive_mode": adaptive_mode,
                               }.items()))
 
     if settings["rviz"]:
@@ -200,10 +175,10 @@ def robots(context):
     first, others = fleet[0]["name"], [r["name"] for r in fleet[1:]]
     label = f"Gazebo, {first}" if not others else f"Gazebo fleet of {len(fleet)}"
     bridge_params = {"backend_label": label, "port": port, "start_enabled": start_enabled,
-                     "robot_name": first, "polytope_file": polytope}
+                     "robot_name": first, "polytope_file": polytope,
+                     "estimator": estimator, "adaptive_mode": adaptive_mode}
     if others:
         bridge_params["others"] = others
-    # Root namespace. Plots the first robot and streams the others as "fleet" messages.
     actions.append(Node(package="camslab_webui", executable="webui_bridge", output="screen",
                         parameters=[bridge_params]))
     return actions
