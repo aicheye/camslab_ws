@@ -3,7 +3,6 @@
 import dataclasses
 import math
 
-import numpy as np
 import rclpy
 from geometry_msgs.msg import Point32, PolygonStamped, Pose, PoseStamped, Twist
 from nav_msgs.msg import Path
@@ -11,12 +10,11 @@ from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
-from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import SetBool
 
 from .controller import control
 from .safety import Polytope, check_inside
-from .trajectory import Reference, check_limits, make_shape, reference
+from .trajectory import check_limits, make_shape, reference
 from .types import Params, State
 
 TRAJECTORY_FIELDS = ("x0", "y0", "theta0", "circle_speed", "kappa", "a", "b", "period",
@@ -78,7 +76,6 @@ class ControllerNode(Node):
         self.frame_id = self.declare_parameter("frame_id", "map").value
         start_enabled = self.declare_parameter("start_enabled", False).value
         rate = self.declare_parameter("rate", 50.0).value
-        self.external_reference = self.declare_parameter("external_reference", False).value
 
         self.enabled = False
         self.enable_error = ""
@@ -88,8 +85,6 @@ class ControllerNode(Node):
         self.pose_time = None
         self.t0 = None
         self.last_drive = None
-        self.external_ref = None
-        self.external_ref_time = None
 
         latched = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL)
         self.cmd_pub = self.create_publisher(Twist, "cmd_vel", 10)
@@ -97,8 +92,6 @@ class ControllerNode(Node):
         self.ref_path_pub = self.create_publisher(Path, "ref_path", latched)
         self.polytope_pub = self.create_publisher(PolygonStamped, "safety_polytope", latched)
         self.create_subscription(PoseStamped, "pose", self.on_pose, qos_profile_sensor_data)
-        if self.external_reference:
-            self.create_subscription(Float64MultiArray, "reference", self.on_reference, 10)
         self.create_service(SetBool, "~/enable", self.on_enable)
 
         self.publish_polytope()
@@ -115,16 +108,6 @@ class ControllerNode(Node):
         if state is not None:
             self.state = state
             self.pose_time = self.get_clock().now()
-
-    def on_reference(self, msg):
-        d = list(msg.data)
-        if len(d) != 7:
-            self.get_logger().error(f"reference needs 7 values, got {len(d)}",
-                                    throttle_duration_sec=2.0)
-            return
-        self.external_ref = Reference(p=np.array(d[0:2]), q=np.array(d[2:4]), v=d[4], w=d[5],
-                                      kappa=d[6])
-        self.external_ref_time = self.get_clock().now()
 
     def on_enable(self, request, response):
         response.success = self.set_enabled(request.data)
@@ -196,14 +179,6 @@ class ControllerNode(Node):
         self.get_logger().info("enabled" if enabled else "disabled")
         return True
 
-    def current_reference(self):
-        if not self.external_reference:
-            return reference(self.shape, self.seconds(self.t0))
-        if self.external_ref_time is not None \
-                and self.seconds(self.external_ref_time) < self.pose_timeout:
-            return self.external_ref
-        raise ValueError("no fresh reference from the estimator node")
-
     def on_timer(self):
         pose_fresh = self.pose_time is not None and self.seconds(self.pose_time) < self.pose_timeout
         if self.enabled and self.pose_time is not None and not pose_fresh:
@@ -220,7 +195,7 @@ class ControllerNode(Node):
             if self.t0 is None:
                 self.t0 = self.get_clock().now()
             try:
-                ref = self.current_reference()
+                ref = reference(self.shape, self.seconds(self.t0))
                 msg = PoseStamped()
                 msg.header.stamp = self.get_clock().now().to_msg()
                 msg.header.frame_id = self.frame_id

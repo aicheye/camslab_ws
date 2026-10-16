@@ -1,8 +1,9 @@
 """Fixed-step closed loop of the controller, the unicycle, and an optional adaptive estimator."""
 
+import math
+
 import numpy as np
-from camslab.adaptive.base import Estimator, Measurement
-from camslab.adaptive.paths import distance_to_path
+from camslab.adaptive import COLUMNS, Estimator, Path
 
 from camslab.controller import control
 from ..common.unicycle import clamp, step
@@ -11,12 +12,13 @@ from camslab.types import Params, State
 
 
 def estimate_fields(estimator: Estimator | None) -> list[str]:
-    """Column names appended to each sample row when an estimator runs: "<field>_hat"."""
-    return [] if estimator is None else [f + "_hat" for f in estimator.fields]
+    """Column names appended to each sample row when an estimator runs: theta_hat, then
+    the true circle at the closest point of the path."""
+    return [] if estimator is None else list(COLUMNS)
 
 
 def simulate(initial: State, params: Params, dt: float, t_max: float,
-             estimator: Estimator | None = None, mode: str = "open"):
+             estimator: Estimator | None = None):
     """Track params.shape from t = 0 to t_max.
 
     A reference past kappa_max or w_max is tracked anyway; clamp() keeps the commands
@@ -24,14 +26,11 @@ def simulate(initial: State, params: Params, dt: float, t_max: float,
     dist, xr, yr], the column order of camslab_webui.server.SAMPLE_FIELDS, with
     dist = ||p* - p|| and (xr, yr) = p*.
 
-    With an estimator, each row also ends with theta_hat (estimate_fields()), and mode
-    picks the reference: "open" tracks the true trajectory while the estimator observes,
-    "closed" tracks estimator.reference(), built from theta_hat.
+    With an estimator, which only observes, each row also ends with theta_hat and the true
+    circle (estimate_fields(), None where the path is straight).
     """
-    if mode not in ("open", "closed"):
-        raise ValueError(f"mode must be open or closed, got {mode!r}")
     shape = make_shape(params)
-    path = params.to_dict()
+    path = Path(params) if estimator is not None else None
     state = initial
     v = w = 0.0
     samples = []
@@ -40,15 +39,9 @@ def simulate(initial: State, params: Params, dt: float, t_max: float,
         ref = reference(shape, t)
         theta_hat = []
         if estimator is not None:
-            m = Measurement(t=t, p=state.p, q=state.q, v=v, w=w,
-                            xi=distance_to_path(path, state.p))
-            estimator.update(m, dt)
-            theta_hat = [float(x) for x in estimator.estimate()]
-            if mode == "closed":
-                r = estimator.reference(m, dt)
-                if r is None:
-                    raise ValueError(f"estimator {estimator.name!r} has no closed-loop mode")
-                ref = r
+            estimator.update(state.p, path.xi(state.p), dt)
+            theta_hat = [float(x) if math.isfinite(x) else None
+                         for x in (*estimator.estimate(), *path.truth(state.p))]
         v, w = clamp(*control(state, ref, params), params)
         dist = float(np.linalg.norm(ref.p - state.p))
         samples.append([t, float(state.p[0]), float(state.p[1]),

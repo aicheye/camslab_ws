@@ -36,26 +36,21 @@ def controller_files(context):
 
 def controller(context):
     """The controller node, with the `controller` file and then the polytope file after
-    params.yaml when they exist. In closed-loop adaptive mode it tracks the estimator's
-    reference."""
+    params.yaml when they exist."""
     files = controller_files(context)
     polytope = LaunchConfiguration("polytope").perform(context)
     if polytope and os.path.isfile(polytope):
         files.append(polytope)
     start_enabled = LaunchConfiguration("start_enabled").perform(context).lower() == "true"
-    closed = (LaunchConfiguration("estimator").perform(context) != ""
-              and LaunchConfiguration("adaptive_mode").perform(context) == "closed")
     return [Node(package="camslab", executable="controller", output="screen",
-                 parameters=files + [{"start_enabled": start_enabled,
-                                      "external_reference": closed}])]
+                 parameters=files + [{"start_enabled": start_enabled}])]
 
 
 def estimator(context):
-    """The estimator node when `estimator` is set. It reads the trajectory
+    """The estimator node when `adaptive` is true. It reads the trajectory
     from the same parameter files as the controller, whose values are under
     /**/controller, so they are copied into its own parameters here."""
-    name = LaunchConfiguration("estimator").perform(context)
-    if not name:
+    if LaunchConfiguration("adaptive").perform(context).lower() != "true":
         return []
     params = {}
     for path in controller_files(context):
@@ -63,8 +58,6 @@ def estimator(context):
             for key, value in (yaml.safe_load(f) or {}).items():
                 if key.rstrip("/").endswith("controller"):
                     params.update(value.get("ros__parameters", {}))
-    params.update(estimator=name,
-                  adaptive_mode=LaunchConfiguration("adaptive_mode").perform(context))
     return [Node(package="camslab", executable="estimator", output="screen",
                  parameters=[params])]
 
@@ -95,11 +88,9 @@ def generate_launch_description():
         DeclareLaunchArgument("world", default_value="camslab", description="Gazebo world name"),
         DeclareLaunchArgument("start_enabled", default_value="true",
                               description="controller drives as soon as it has a pose"),
-        DeclareLaunchArgument("estimator", default_value="",
-                              description="adaptive estimator to run (circle); empty for none"),
-        DeclareLaunchArgument("adaptive_mode", default_value="open",
-                              description="open: track the true trajectory; closed: track "
-                              "the estimator's reference"),
+        DeclareLaunchArgument("adaptive", default_value="false",
+                              description="run the adaptive path estimator next to the "
+                              "controller"),
 
         ign_partition(),
         GroupAction([

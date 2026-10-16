@@ -279,23 +279,16 @@ function fillSelect(select, values, labels = {}) {
   }));
 }
 
-function syncEstimatePlots(fields, truth) {
+function syncEstimatePlots(fields) {
   const plot = plots[plots.length - 1];
   $('estimates-figure').hidden = fields.length === 0;
-  const names = fields.map((f) => f.replace(/_hat$/, ''));
+  const names = [...new Set(fields.map((f) => f.replace(/_(hat|true)$/, '')))];
   const color = (i) => colors[ESTIMATE_COLORS[i % ESTIMATE_COLORS.length]];
-  plot.series = () => names.map((name, i) => ({ col: FIELDS.length + i, color: color(i) }));
-  plot.refs = () => {
-    if (!truth) return [];
-    const groups = [];
-    names.forEach((name, i) => {
-      const same = groups.find((g) => Math.abs(g.value - truth[i]) < 1e-9);
-      if (same) { same.names.push(name); same.color = colors['text-muted']; }
-      else groups.push({ value: truth[i], names: [name], color: color(i) });
-    });
-    return groups.map((g) => ({ value: g.value, label: `${g.names.join(', ')} true`,
-      color: g.color }));
-  };
+  plot.series = () => fields.map((f, col) => ({
+    col: FIELDS.length + col,
+    color: color(names.indexOf(f.replace(/_(hat|true)$/, ''))),
+    dash: f.endsWith('_true') ? [5, 4] : null,
+  }));
   const legend = $('estimate-legend');
   if (legend.dataset.fields !== names.join(',')) {
     legend.dataset.fields = names.join(',');
@@ -318,22 +311,13 @@ function syncAdaptive() {
   const a = state.adaptive;
   $('adaptive-set').hidden = !a;
   if (!a) return;
-  fillSelect($('adaptive-estimator'), [''].concat(a.choices), { '': 'none' });
-  fillSelect($('adaptive-mode'), a.modes,
-    { open: 'open loop: track the true path', closed: 'closed loop: track the estimate' });
-  setValue($('adaptive-estimator'), a.estimator);
-  setValue($('adaptive-mode'), a.mode);
-  $('adaptive-estimator').disabled = !a.editable;
-  $('adaptive-mode').disabled = !a.editable;
-  $('adaptive-info').textContent = a.error || '';
-  syncEstimatePlots(a.error ? [] : a.fields, a.truth);
+  $('adaptive-on').checked = a.enabled;
+  $('adaptive-on').disabled = !a.editable;
+  syncEstimatePlots(a.fields);
 }
 
-$('adaptive-estimator').addEventListener('change', (ev) => {
-  send({ type: 'set_params', params: { estimator: ev.target.value } });
-});
-$('adaptive-mode').addEventListener('change', (ev) => {
-  send({ type: 'set_params', params: { adaptive_mode: ev.target.value } });
+$('adaptive-on').addEventListener('change', (ev) => {
+  send({ type: 'set_params', params: { adaptive: ev.target.checked } });
 });
 
 $('shape').addEventListener('change', (ev) => {
@@ -561,7 +545,7 @@ $('spline-apply').addEventListener('click', () => {
 });
 
 $('csv').addEventListener('click', () => {
-  const extra = state.adaptive && !state.adaptive.error ? state.adaptive.fields : [];
+  const extra = state.adaptive ? state.adaptive.fields : [];
   const lines = [FIELDS.concat(extra).join(',')];
   for (const row of selRows()) lines.push(row.join(','));
   const blob = new Blob([lines.join('\n') + '\n'], { type: 'text/csv' });
@@ -719,7 +703,7 @@ function drawPath(ctx) {
 
 function estimatedCircle(row) {
   const a = state.adaptive;
-  if (!a || a.error || !row) return null;
+  if (!a || !row) return null;
   const at = (name) => {
     const i = a.fields.indexOf(name + '_hat');
     return i < 0 ? NaN : row[FIELDS.length + i];
@@ -1081,9 +1065,10 @@ function drawPlot(plot) {
     ctx.fillText(r.label, w - m.right - 2, y - 3);
   }
 
-  for (const { col, color } of series) {
+  for (const { col, color, dash } of series) {
     ctx.strokeStyle = color;
-    ctx.lineWidth = 2;
+    ctx.setLineDash(dash || []);
+    ctx.lineWidth = dash ? 1.5 : 2;
     ctx.lineJoin = 'round';
     ctx.beginPath();
     let drawing = false;
@@ -1094,6 +1079,7 @@ function drawPlot(plot) {
       drawing = true;
     }
     ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   const mark = (index, lineColor) => {
@@ -1154,7 +1140,7 @@ function setHover(index, ev) {
       ['x, y', fixed(s[X], 3) + ', ' + fixed(s[Y], 3)],
     ];
     const a = state.adaptive;
-    if (a && !a.error) {
+    if (a) {
       a.fields.forEach((name, i) => {
         const v = s[FIELDS.length + i];
         if (Number.isFinite(v)) rows.push([name, fixed(v, 3)]);

@@ -19,14 +19,14 @@ def tree(directory):
 setup(
     name=package_name,
     version="0.1.0",
-    packages=[package_name, package_name + ".adaptive"],
+    packages=[package_name],
     data_files=[
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         ("share/" + package_name, ["package.xml"]),
         *[entry for d in ("launch", "config", "models", "rviz", "urdf", "worlds")
           if os.path.isdir(d) for entry in tree(d)],
     ],
-    install_requires=["setuptools", "numpy"],
+    install_requires=["setuptools", "numpy", "scipy"],
     zip_safe=True,
     maintainer="Sean Yang",
     maintainer_email="seanxxyang@gmail.com",

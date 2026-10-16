@@ -139,8 +139,7 @@ def robots(context):
     start_enabled = bool(settings["start_enabled"])
     polytope = LaunchConfiguration("polytope").perform(context)
     controller = camslab_settings.controller_file(settings)
-    estimator = str(settings.get("estimator") or "")
-    adaptive_mode = str(settings.get("adaptive_mode") or "open")
+    adaptive = bool(settings.get("adaptive"))
 
     gz_args = f"-r -s {world}" if not gui else f"-r --gui-config {gui_config} {world}"
     actions = [IncludeLaunchDescription(
@@ -162,8 +161,7 @@ def robots(context):
                               "controller": controller,
                               "polytope": polytope,
                               "start_enabled": str(start_enabled).lower(),
-                              "estimator": estimator,
-                              "adaptive_mode": adaptive_mode,
+                              "adaptive": str(adaptive).lower(),
                               }.items()))
 
     if settings["rviz"]:
@@ -176,7 +174,7 @@ def robots(context):
     label = f"Gazebo, {first}" if not others else f"Gazebo fleet of {len(fleet)}"
     bridge_params = {"backend_label": label, "port": port, "start_enabled": start_enabled,
                      "robot_name": first, "polytope_file": polytope,
-                     "estimator": estimator, "adaptive_mode": adaptive_mode}
+                     "adaptive": adaptive}
     if others:
         bridge_params["others"] = others
     actions.append(Node(package="camslab_webui", executable="webui_bridge", output="screen",

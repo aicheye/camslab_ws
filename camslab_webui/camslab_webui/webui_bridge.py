@@ -75,11 +75,9 @@ class WebuiBridgeNode(Node, Backend):
         port = self.declare_parameter("port", 8000).value
         sample_rate = self.declare_parameter("sample_rate", 25.0).value
         self.polytope_file = self.declare_parameter("polytope_file", "").value
-        self.estimator = self.declare_parameter("estimator", "").value
-        self.adaptive_mode = self.declare_parameter("adaptive_mode", "open").value
+        self.estimator = self.declare_parameter("adaptive", False).value
         self.estimate_names = []
         self.estimate = None
-        self.estimate_truth = None
         self.sample_period = 1.0 / sample_rate
 
         self.lock = threading.Lock()
@@ -116,9 +114,6 @@ class WebuiBridgeNode(Node, Backend):
         if self.estimator:
             self.create_subscription(
                 Float64MultiArray, f"/{self.robot_name}/estimate", self.on_estimate, 10)
-            self.create_subscription(
-                Float64MultiArray, f"/{self.robot_name}/estimate_true", self.on_estimate_truth,
-                QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL))
             self.reset_client = self.create_client(
                 Trigger, f"/{self.robot_name}/estimator/reset")
         self.set_params_clients = [
@@ -149,18 +144,11 @@ class WebuiBridgeNode(Node, Backend):
     def on_estimate(self, msg):
         names = self.names_of(msg)
         with self.lock:
-            self.estimate = list(msg.data)
+            self.estimate = [x if math.isfinite(x) else None for x in msg.data]
             changed = names != self.estimate_names
             self.estimate_names = names
         if changed:
             self.server.broadcast_threadsafe(self.config_msg())
-
-    def on_estimate_truth(self, msg):
-        with self.lock:
-            self.estimate_truth = list(msg.data)
-            if not self.estimate_names:
-                self.estimate_names = self.names_of(msg)
-        self.server.broadcast_threadsafe(self.config_msg())
 
     def on_pose(self, robot, msg):
         now = self.now()
@@ -232,9 +220,7 @@ class WebuiBridgeNode(Node, Backend):
             adaptive = None
             if self.estimator:
                 adaptive = adaptive_config(
-                    self.estimator, self.adaptive_mode, [self.estimator], [self.adaptive_mode],
-                    [n + "_hat" for n in self.estimate_names], self.estimate_truth,
-                    editable=False)
+                    True, self.estimate_names, editable=False)
             return {"type": "config", "params": dict(self.params), "path": list(self.path),
                     "initial": None,
                     "polytope": {**self.polytope, "file": self.polytope_file},

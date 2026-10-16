@@ -11,7 +11,7 @@ a known excitation input, which is the open-loop identification case on slide 38
 circle is fixed, so `c` and `r` are constant, as your sheet's derivation assumes.
 
 `path_circle/circle.py` implements every step below, and its tests pass. The same
-estimator runs in the tracking simulator and in Gazebo as `camslab.adaptive.circle`
+estimator runs in the tracking simulator and in Gazebo as `camslab.adaptive`
 (see the developer reference).
 
 Run everything from `camslab_offline/`:
@@ -99,10 +99,6 @@ Only the sensor line may read `circle`. Everything after it uses `p` and `xi` on
 ## Open questions
 
 - A general path, where `c` and `r` change as the closest point moves, is not covered.
-- In closed loop, where the controller tracks the estimated circle, the robot drives one
-  loop at a single frequency. `phi` then stays in a 2-D plane, so the three parameters are
-  not persistently excited and the estimate settles at a wrong circle from most starting
-  poses.
 
 ## Reading
 

@@ -7,11 +7,9 @@ rviz: true            # RViz, the main view
 webui: true           # web UI on `port`
 port: 8000
 start_enabled: true   # controllers drive as soon as they have a pose
-# Adaptive estimator from camslab.adaptive, run next to each controller: circle, or "" for
-# none. adaptive_mode open: the controller tracks the true trajectory and the estimator
-# only observes. closed: the controller tracks the reference built from the estimate.
-estimator: ""
-adaptive_mode: open
+# Run the adaptive path estimator (camslab.adaptive) next to each controller. It only
+# observes: the controller tracks the true trajectory.
+adaptive: false
 
 # Controller parameters for the Gazebo R2, on top of params.yaml.
 controller:

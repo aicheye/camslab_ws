@@ -1,4 +1,4 @@
-"""Trajectory tracking: python -m camslab_offline.tracking [--csv PATH] [--estimator NAME --mode open|closed]."""
+"""Trajectory tracking: python -m camslab_offline.tracking [--csv PATH] [--adaptive]."""
 
 import argparse
 import csv
@@ -7,7 +7,7 @@ import logging
 import math
 import random
 
-from camslab.adaptive.registry import ESTIMATORS, MODES, make_estimator
+from camslab.adaptive import Estimator
 from camslab_webui.server import SAMPLE_FIELDS, UiServer
 
 from .backend import SimBackend
@@ -34,10 +34,8 @@ def main():
             ap.add_argument(flag, type=float, nargs="+", default=field.default)
         else:
             ap.add_argument(flag, type=float, default=field.default)
-    ap.add_argument("--estimator", choices=sorted(ESTIMATORS),
-                    help="adaptive estimator to run alongside the controller")
-    ap.add_argument("--mode", choices=MODES, default="open",
-                    help="open: track the true trajectory; closed: track the estimate")
+    ap.add_argument("--adaptive", action="store_true",
+                    help="run the path estimator next to the controller")
     ap.add_argument("--csv", metavar="PATH", help="run once, write samples, exit")
     args = ap.parse_args()
 
@@ -53,9 +51,9 @@ def main():
                    "theta": rng.uniform(-math.pi, math.pi)}
 
     if args.csv:
-        estimator = make_estimator(args.estimator, params.to_dict()) if args.estimator else None
+        estimator = Estimator(params) if args.adaptive else None
         samples = simulate(State.from_pose(**initial), params, args.dt, args.t_max,
-                           estimator, args.mode)
+                           estimator)
         fields = SAMPLE_FIELDS + estimate_fields(estimator)
         with open(args.csv, "w", newline="") as f:
             writer = csv.writer(f)
@@ -64,16 +62,11 @@ def main():
         last = samples[-1]
         print(f"{len(samples)} samples, ||p* - p|| = {last[7]:.4f} m at t = {last[0]:.2f} s")
         if estimator is not None:
-            names = estimate_fields(estimator)
-            print("estimate  " + "  ".join(f"{n}={v:.4f}" for n, v in zip(names, last[10:])))
-            truth = estimator.truth()
-            if truth is not None:
-                print("true      " + "  ".join(f"{n}={v:.4f}"
-                                               for n, v in zip(estimator.fields, truth)))
+            print("  ".join(f"{n}={v:.4f}" if v is not None else f"{n}=none"
+                            for n, v in zip(estimate_fields(estimator), last[10:])))
         return
 
-    backend = SimBackend(params, initial, args.dt, args.t_max, args.estimator or "",
-                         args.mode)
+    backend = SimBackend(params, initial, args.dt, args.t_max, args.adaptive)
     backend.server = UiServer(backend, args.host, args.port)
     backend.server.run()
 

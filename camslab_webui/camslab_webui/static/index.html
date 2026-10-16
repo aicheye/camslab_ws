@@ -62,7 +62,7 @@
           <canvas id="plot-dist" class="plot"></canvas>
         </figure>
         <figure id="estimates-figure" hidden>
-          <figcaption>Estimates <span id="estimate-legend" class="legend"></span></figcaption>
+          <figcaption>Estimates, dashed: true circle at the closest point <span id="estimate-legend" class="legend"></span></figcaption>
           <canvas id="plot-estimates" class="plot"></canvas>
         </figure>
         <figure>
@@ -103,13 +103,7 @@
           </fieldset>
           <fieldset id="adaptive-set">
             <legend>Adaptive estimator</legend>
-            <label>estimator
-              <select id="adaptive-estimator"><option value="">none</option></select>
-            </label>
-            <label>mode
-              <select id="adaptive-mode"></select>
-            </label>
-            <div id="adaptive-info" class="muted poly-info"></div>
+            <label><input id="adaptive-on" type="checkbox"> run the estimator</label>
           </fieldset>
           <fieldset id="spline-set" hidden>
             <legend>Spline control points</legend>
