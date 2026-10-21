@@ -24,7 +24,7 @@
     <section class="card world-card">
       <div class="card-head">
         <h2>Global frame</h2>
-        <span class="muted">orange: p*(t) · dashed green: estimate · drag: pan · wheel: zoom</span>
+        <span class="muted">orange: p*(t) · dashed green: estimate · grey squares: markers · drag: pan · wheel: zoom</span>
         <span class="spacer"></span>
         <button id="fit" type="button">Fit</button>
         <button id="view-reset" type="button">Reset view</button>
@@ -62,7 +62,7 @@
           <canvas id="plot-dist" class="plot"></canvas>
         </figure>
         <figure id="estimates-figure" hidden>
-          <figcaption>Estimates, dashed: true circle at the closest point <span id="estimate-legend" class="legend"></span></figcaption>
+          <figcaption>Estimates, dashed: true values <span id="estimate-legend" class="legend"></span></figcaption>
           <canvas id="plot-estimates" class="plot"></canvas>
         </figure>
         <figure>
@@ -103,7 +103,7 @@
           </fieldset>
           <fieldset id="adaptive-set">
             <legend>Adaptive estimator</legend>
-            <label><input id="adaptive-on" type="checkbox"> run the estimator</label>
+            <label>estimator <select id="adaptive-kind"></select></label>
           </fieldset>
           <fieldset id="spline-set" hidden>
             <legend>Spline control points</legend>

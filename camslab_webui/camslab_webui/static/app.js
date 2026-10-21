@@ -279,13 +279,14 @@ function fillSelect(select, values, labels = {}) {
   }));
 }
 
-function syncEstimatePlots(fields) {
+function syncEstimatePlots(fields, plotted) {
   const plot = plots[plots.length - 1];
   $('estimates-figure').hidden = fields.length === 0;
-  const names = [...new Set(fields.map((f) => f.replace(/_(hat|true)$/, '')))];
+  const shown = (plotted || fields).filter((f) => fields.includes(f));
+  const names = [...new Set(shown.map((f) => f.replace(/_(hat|true)$/, '')))];
   const color = (i) => colors[ESTIMATE_COLORS[i % ESTIMATE_COLORS.length]];
-  plot.series = () => fields.map((f, col) => ({
-    col: FIELDS.length + col,
+  plot.series = () => shown.map((f) => ({
+    col: FIELDS.length + fields.indexOf(f),
     color: color(names.indexOf(f.replace(/_(hat|true)$/, ''))),
     dash: f.endsWith('_true') ? [5, 4] : null,
   }));
@@ -311,13 +312,15 @@ function syncAdaptive() {
   const a = state.adaptive;
   $('adaptive-set').hidden = !a;
   if (!a) return;
-  $('adaptive-on').checked = a.enabled;
-  $('adaptive-on').disabled = !a.editable;
-  syncEstimatePlots(a.fields);
+  const kinds = a.kinds || { '': 'off' };
+  fillSelect($('adaptive-kind'), Object.keys(kinds), kinds);
+  $('adaptive-kind').value = a.kind || '';
+  $('adaptive-kind').disabled = !a.editable;
+  syncEstimatePlots(a.fields, a.plot);
 }
 
-$('adaptive-on').addEventListener('change', (ev) => {
-  send({ type: 'set_params', params: { adaptive: ev.target.checked } });
+$('adaptive-kind').addEventListener('change', (ev) => {
+  send({ type: 'set_params', params: { adaptive: ev.target.value } });
 });
 
 $('shape').addEventListener('change', (ev) => {
@@ -732,6 +735,51 @@ function drawEstimatedCircle(ctx, row) {
   ctx.fillText('estimate', x + 7, y - 7);
 }
 
+function estimatedMarkers(row) {
+  const a = state.adaptive;
+  if (!a || !row) return [];
+  const at = (name) => {
+    const i = a.fields.indexOf(name);
+    return i < 0 ? NaN : row[FIELDS.length + i];
+  };
+  const markers = [];
+  for (let j = 1; a.fields.includes(`t${j}_1_hat`); j++) {
+    markers.push({
+      j, x: at(`t${j}_1_hat`), y: at(`t${j}_2_hat`),
+      xTrue: at(`t${j}_1_true`), yTrue: at(`t${j}_2_true`),
+    });
+  }
+  return markers;
+}
+
+function drawEstimatedMarkers(ctx, row) {
+  const size = 5;
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.lineWidth = 1.5;
+  for (const m of estimatedMarkers(row)) {
+    if ([m.xTrue, m.yTrue].every(Number.isFinite)) {
+      const x = view.sx(m.xTrue), y = view.sy(m.yTrue);
+      ctx.strokeStyle = colors['text-muted'];
+      ctx.setLineDash([]);
+      ctx.strokeRect(x - size, y - size, 2 * size, 2 * size);
+      ctx.fillStyle = colors['text-muted'];
+      ctx.fillText(`M${m.j}`, x + size + 3, y - size);
+    }
+    if ([m.x, m.y].every(Number.isFinite)) {
+      const x = view.sx(m.x), y = view.sy(m.y);
+      ctx.strokeStyle = colors['series-3'];
+      ctx.setLineDash([4, 3]);
+      ctx.strokeRect(x - size, y - size, 2 * size, 2 * size);
+      ctx.setLineDash([]);
+      ctx.beginPath();
+      ctx.moveTo(x - size, y); ctx.lineTo(x + size, y);
+      ctx.moveTo(x, y - size); ctx.lineTo(x, y + size);
+      ctx.stroke();
+    }
+  }
+}
+
 function drawPolytope(ctx) {
   const outline = (poly) => {
     ctx.beginPath();
@@ -889,8 +937,10 @@ function drawWorld() {
   drawPath(ctx);
   const n = state.samples.length;
   const sel = selRows();
-  if (state.hover >= 0 && state.hover < sel.length) drawEstimatedCircle(ctx, sel[state.hover]);
-  else if (n > 0 && state.cursor >= 0) drawEstimatedCircle(ctx, state.samples[state.cursor]);
+  const current = state.hover >= 0 && state.hover < sel.length ? sel[state.hover]
+    : (n > 0 && state.cursor >= 0 ? state.samples[state.cursor] : null);
+  drawEstimatedCircle(ctx, current);
+  drawEstimatedMarkers(ctx, current);
   if (state.initial && state.canSetPose) {
     const th = state.initial.theta;
     drawRobot(ctx, state.initial.x, state.initial.y, Math.cos(th), Math.sin(th), true);

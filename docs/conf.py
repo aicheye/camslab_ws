@@ -9,7 +9,7 @@ myst_heading_anchors = 3
 
 source_suffix = {".md": "markdown"}
 exclude_patterns = ["_build", "requirements.txt", "ode-hints.md", "estimation-hints.md",
-                    "path-estimation-hints.md"]
+                    "path-estimation-hints.md", "fiducial-hints.md"]
 
 html_theme = "sphinx_rtd_theme"
 html_title = "CAMS Lab Gazebo Simulator"

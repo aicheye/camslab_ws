@@ -75,8 +75,10 @@ class WebuiBridgeNode(Node, Backend):
         port = self.declare_parameter("port", 8000).value
         sample_rate = self.declare_parameter("sample_rate", 25.0).value
         self.polytope_file = self.declare_parameter("polytope_file", "").value
-        self.estimator = self.declare_parameter("adaptive", False).value
+        self.adaptive = self.declare_parameter("adaptive", "").value or ""
+        self.estimator = bool(self.adaptive)
         self.estimate_names = []
+        self.plot_names = None
         self.estimate = None
         self.sample_period = 1.0 / sample_rate
 
@@ -139,14 +141,19 @@ class WebuiBridgeNode(Node, Backend):
 
     @staticmethod
     def names_of(msg):
-        return msg.layout.dim[0].label.split(",") if msg.layout.dim else []
+        """(column names, plotted names or None) from the layout labels."""
+        dims = msg.layout.dim
+        names = dims[0].label.split(",") if dims else []
+        plot = dims[1].label.split(",") if len(dims) > 1 else None
+        return names, plot
 
     def on_estimate(self, msg):
-        names = self.names_of(msg)
+        names, plot = self.names_of(msg)
         with self.lock:
             self.estimate = [x if math.isfinite(x) else None for x in msg.data]
-            changed = names != self.estimate_names
+            changed = names != self.estimate_names or plot != self.plot_names
             self.estimate_names = names
+            self.plot_names = plot
         if changed:
             self.server.broadcast_threadsafe(self.config_msg())
 
@@ -219,8 +226,8 @@ class WebuiBridgeNode(Node, Backend):
         with self.lock:
             adaptive = None
             if self.estimator:
-                adaptive = adaptive_config(
-                    True, self.estimate_names, editable=False)
+                adaptive = adaptive_config(self.adaptive, self.estimate_names,
+                                           editable=False, plot=self.plot_names)
             return {"type": "config", "params": dict(self.params), "path": list(self.path),
                     "initial": None,
                     "polytope": {**self.polytope, "file": self.polytope_file},

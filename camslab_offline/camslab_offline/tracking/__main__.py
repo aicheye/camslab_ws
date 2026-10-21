@@ -1,4 +1,4 @@
-"""Trajectory tracking: python -m camslab_offline.tracking [--csv PATH] [--adaptive]."""
+"""Trajectory tracking: python -m camslab_offline.tracking [--csv PATH] [--adaptive KIND]."""
 
 import argparse
 import csv
@@ -7,11 +7,10 @@ import logging
 import math
 import random
 
-from camslab.adaptive import Estimator
 from camslab_webui.server import SAMPLE_FIELDS, UiServer
 
 from .backend import SimBackend
-from .simulate import estimate_fields, simulate
+from .simulate import ESTIMATORS, estimate_fields, make_observer, simulate
 from camslab.types import SHAPES, Params, State
 
 
@@ -34,8 +33,11 @@ def main():
             ap.add_argument(flag, type=float, nargs="+", default=field.default)
         else:
             ap.add_argument(flag, type=float, default=field.default)
-    ap.add_argument("--adaptive", action="store_true",
-                    help="run the path estimator next to the controller")
+    ap.add_argument("--adaptive", nargs="?", const="path", default="", choices=ESTIMATORS,
+                    metavar="KIND",
+                    help="run an estimator next to the controller: path (the circle that "
+                         "fits the path, the default when KIND is omitted) or fiducial "
+                         "(camera extrinsic and marker poses)")
     ap.add_argument("--csv", metavar="PATH", help="run once, write samples, exit")
     args = ap.parse_args()
 
@@ -51,19 +53,19 @@ def main():
                    "theta": rng.uniform(-math.pi, math.pi)}
 
     if args.csv:
-        estimator = Estimator(params) if args.adaptive else None
+        observer = make_observer(args.adaptive, params)
         samples = simulate(State.from_pose(**initial), params, args.dt, args.t_max,
-                           estimator)
-        fields = SAMPLE_FIELDS + estimate_fields(estimator)
+                           observer)
+        fields = SAMPLE_FIELDS + estimate_fields(observer)
         with open(args.csv, "w", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(fields)
             writer.writerows(samples)
         last = samples[-1]
         print(f"{len(samples)} samples, ||p* - p|| = {last[7]:.4f} m at t = {last[0]:.2f} s")
-        if estimator is not None:
+        if observer is not None:
             print("  ".join(f"{n}={v:.4f}" if v is not None else f"{n}=none"
-                            for n, v in zip(estimate_fields(estimator), last[10:])))
+                            for n, v in zip(estimate_fields(observer), last[10:])))
         return
 
     backend = SimBackend(params, initial, args.dt, args.t_max, args.adaptive)

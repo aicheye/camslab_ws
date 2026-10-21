@@ -7,7 +7,8 @@ import pytest
 from camslab.adaptive import COLUMNS, Estimator, Path, filter_matrices
 
 from camslab_offline.common.unicycle import step
-from camslab_offline.tracking.simulate import estimate_fields, simulate
+from camslab_offline.tracking.simulate import (PathObserver, estimate_fields, make_observer,
+                                               simulate)
 from camslab.trajectory import make_shape
 from camslab.types import Params, State
 
@@ -59,14 +60,14 @@ def test_truth_is_nan_on_a_straight_side():
 @pytest.mark.parametrize("shape", ["gerono", "ellipse", "rectangle", "spline"])
 def test_estimator_runs_on_every_shape(shape):
     params = Params(shape=shape)
-    rows = simulate(State.from_pose(2.0, 1.0, 0.0), params, 0.02, 20.0, Estimator(params))
+    rows = simulate(State.from_pose(2.0, 1.0, 0.0), params, 0.02, 20.0, PathObserver(params))
     assert all(len(row) == 10 + len(COLUMNS) for row in rows)
     assert np.all(np.isfinite(np.array([row[:13] for row in rows])))
 
 
 def test_estimator_does_not_change_the_tracking():
     initial = State.from_pose(2.5, 0.5, 0.0)
-    observed = simulate(initial, Params(), 0.02, 40.0, Estimator(Params()))
+    observed = simulate(initial, Params(), 0.02, 40.0, PathObserver(Params()))
     plain = simulate(initial, Params(), 0.02, 40.0)
     assert np.array(observed)[:, :10] == pytest.approx(np.array(plain), abs=1e-12)
 
@@ -83,8 +84,14 @@ def test_circle_estimator_converges_with_excitation():
 
 
 def test_open_loop_rows_carry_the_estimate():
-    est = Estimator(Params())
-    rows = simulate(State.from_pose(2.5, 0.5, 0.0), Params(), 0.02, 60.0, est)
-    assert estimate_fields(est) == list(COLUMNS)
+    observer = make_observer("path", Params())
+    rows = simulate(State.from_pose(2.5, 0.5, 0.0), Params(), 0.02, 60.0, observer)
+    assert estimate_fields(observer) == list(COLUMNS)
     assert rows[-1][11:13] == pytest.approx(CIRCLE[1:], abs=0.05)
     assert rows[-1][13:16] == pytest.approx(CIRCLE, abs=1e-6)
+
+
+def test_make_observer_rejects_unknown_kinds():
+    assert make_observer("", Params()) is None
+    with pytest.raises(ValueError):
+        make_observer("kalman", Params())

@@ -63,12 +63,36 @@ def rgba(robot):
     return " ".join(str(c) for c in (color + [1] if len(color) == 3 else color))
 
 
-def rviz_config(share, fleet):
+def estimator_kind(value):
+    """"" (none), "path" or "fiducial" from the `adaptive` setting; true means path."""
+    value = str(value).strip().lower()
+    if value in ("", "false", "none", "off"):
+        return ""
+    if value == "true":
+        return "path"
+    if value not in ("path", "fiducial"):
+        raise RuntimeError(f"adaptive must be false, path or fiducial, got {value!r}")
+    return value
+
+
+def rviz_config(share, fleet, adaptive=""):
     """Path of an RViz config: rviz/fleet.rviz plus the first robot's safety_polytope and,
     per robot, a RobotModel display and its ref_path and ref_pose. Every controller has the
-    same polytope, so one display draws it."""
+    same polytope, so one display draws it. With the fiducial estimator, the first robot's
+    `fiducials` markers are shown too."""
     with open(os.path.join(share, "rviz", "fleet.rviz")) as f:
         config = yaml.safe_load(f)
+    if adaptive == "fiducial":
+        config["Visualization Manager"]["Displays"].append({
+            "Class": "rviz_default_plugins/MarkerArray",
+            "Name": "fiducials",
+            "Enabled": True,
+            "Topic": {"Value": f"/{fleet[0]['name']}/fiducials", "Depth": 5,
+                      "Durability Policy": "Volatile", "History Policy": "Keep Last",
+                      "Reliability Policy": "Reliable"},
+            "Namespaces": {},
+            "Value": True,
+        })
     config["Visualization Manager"]["Displays"].append({
         "Class": "rviz_default_plugins/Polygon",
         "Name": "safety_polytope",
@@ -139,7 +163,7 @@ def robots(context):
     start_enabled = bool(settings["start_enabled"])
     polytope = LaunchConfiguration("polytope").perform(context)
     controller = camslab_settings.controller_file(settings)
-    adaptive = bool(settings.get("adaptive"))
+    adaptive = estimator_kind(settings.get("adaptive", False))
 
     gz_args = f"-r -s {world}" if not gui else f"-r --gui-config {gui_config} {world}"
     actions = [IncludeLaunchDescription(
@@ -161,12 +185,12 @@ def robots(context):
                               "controller": controller,
                               "polytope": polytope,
                               "start_enabled": str(start_enabled).lower(),
-                              "adaptive": str(adaptive).lower(),
+                              "adaptive": adaptive,
                               }.items()))
 
     if settings["rviz"]:
         actions.append(Node(package="rviz2", executable="rviz2", output="log",
-                            arguments=["-d", rviz_config(share, fleet)]))
+                            arguments=["-d", rviz_config(share, fleet, adaptive)]))
 
     if not settings["webui"]:
         return actions
@@ -174,7 +198,7 @@ def robots(context):
     label = f"Gazebo, {first}" if not others else f"Gazebo fleet of {len(fleet)}"
     bridge_params = {"backend_label": label, "port": port, "start_enabled": start_enabled,
                      "robot_name": first, "polytope_file": polytope,
-                     "adaptive": adaptive}
+                     "adaptive": adaptive}  # "" when no estimator runs
     if others:
         bridge_params["others"] = others
     actions.append(Node(package="camslab_webui", executable="webui_bridge", output="screen",

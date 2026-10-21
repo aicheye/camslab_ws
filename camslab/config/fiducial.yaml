@@ -1,0 +1,28 @@
+# The simulated camera and fiducials for `adaptive: fiducial` (camslab.fiducial). The
+# estimator node reads these; only the marker heights flagged below reach the estimator.
+# Frames: the robot frame has x forward and z up at the rear-axle centre; the camera
+# extrinsic X = R_T_C is given as a Cayley vector g = tan(angle / 2) axis and a position.
+/**/estimator:
+  ros__parameters:
+    camera_cayley: [0.12, -0.08, 0.18]      # x, the camera orientation in the robot frame
+    camera_position: [0.18, -0.06, 0.32]    # t_X [m]
+    # One marker per three values: world position [m] and roll, pitch, yaw [rad]. Keep
+    # every orientation away from a rotation by pi, where the Cayley chart is singular.
+    marker_position: [4.5, 1.0, 0.0,  0.5, 3.0, 0.0,  3.0, 4.0, 0.4]
+    marker_rpy: [0.0, 0.0, 2.5,  0.3, 0.0, -0.5,  0.0, 0.4, -1.8]
+    marker_height_known: [true, true, false]
+    fov: 6.2831853        # full view angle about the camera x axis [rad]; 2 pi sees all
+    range: 1000.0         # detection distance [m]
+
+    # Estimator gains and gates, Section VII of the paper.
+    gamma_x: 2.0          # orientation law (14)
+    gamma_t: 2.0          # translation law (21)
+    gamma_m: 1.0          # marker orientation law (24)
+    gamma_j: 1.0          # marker position law (26)
+    alpha_x: 0.05         # enable (14) once lambda_min(G_x) >= alpha_x
+    alpha_t: 0.05         # enable (21) once lambda_min(G_t) >= alpha_t
+    psi_min: 0.5236       # relative rotation of a rotation pair, at least [rad]
+    straight_tol: 0.0005  # relative rotation of a pure-translation pair, at most [rad]
+    d_min: 0.2            # displacement of a pure-translation pair, at least [m]
+    d_step: 0.1           # robot travel between pair attempts [m]
+    l_buffer: 4.0         # travel over which earlier observations are kept as partners [m]

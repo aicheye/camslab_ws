@@ -41,12 +41,17 @@ def hello_msg(backend, mode, can_set_pose, robot_name="", can_set_polytope=False
     }
 
 
-def adaptive_config(enabled, fields=(), editable=True):
-    """The "adaptive" entry of a "config" message. enabled says whether the estimator
-    runs. fields name the columns appended to each sample row after SAMPLE_FIELDS:
-    "<name>_hat" for the estimate and "<name>_true" for the true value. editable is false
-    when the backend fixes the setting at launch."""
-    return {"enabled": enabled, "fields": list(fields), "editable": editable}
+ESTIMATORS = {"": "off", "path": "path circle", "fiducial": "fiducial surveying"}
+
+
+def adaptive_config(kind, fields=(), editable=True, plot=None):
+    """The "adaptive" entry of a "config" message. kind is the estimator that runs, a key
+    of ESTIMATORS, "" for none. fields name the columns appended to each sample row after
+    SAMPLE_FIELDS: "<name>_hat" for an estimate and "<name>_true" for its true value;
+    other names are plain columns. plot lists the fields drawn in the estimates plot, all
+    of them when None. editable is false when the backend fixes the setting at launch."""
+    return {"kind": kind or "", "kinds": dict(ESTIMATORS), "fields": list(fields),
+            "plot": None if plot is None else list(plot), "editable": editable}
 
 
 def status_msg(state, message=""):

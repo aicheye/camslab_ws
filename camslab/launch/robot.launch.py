@@ -46,11 +46,25 @@ def controller(context):
                  parameters=files + [{"start_enabled": start_enabled}])]
 
 
+def estimator_kind(value):
+    """"" (none), "path" or "fiducial" from an `adaptive` setting; true means path."""
+    value = str(value).strip().lower()
+    if value in ("", "false", "none", "off"):
+        return ""
+    if value == "true":
+        return "path"
+    if value not in ("path", "fiducial"):
+        raise RuntimeError(f"adaptive must be false, path or fiducial, got {value!r}")
+    return value
+
+
 def estimator(context):
-    """The estimator node when `adaptive` is true. It reads the trajectory
+    """The estimator node when `adaptive` is path or fiducial. It reads the trajectory
     from the same parameter files as the controller, whose values are under
-    /**/controller, so they are copied into its own parameters here."""
-    if LaunchConfiguration("adaptive").perform(context).lower() != "true":
+    /**/controller, so they are copied into its own parameters here. The fiducial
+    estimator also loads the `fiducial` file."""
+    kind = estimator_kind(LaunchConfiguration("adaptive").perform(context))
+    if not kind:
         return []
     params = {}
     for path in controller_files(context):
@@ -58,8 +72,12 @@ def estimator(context):
             for key, value in (yaml.safe_load(f) or {}).items():
                 if key.rstrip("/").endswith("controller"):
                     params.update(value.get("ros__parameters", {}))
+    params["estimator"] = kind
+    files = [params]
+    if kind == "fiducial":
+        files.insert(0, LaunchConfiguration("fiducial").perform(context))
     return [Node(package="camslab", executable="estimator", output="screen",
-                 parameters=[params])]
+                 parameters=files)]
 
 
 def generate_launch_description():
@@ -89,8 +107,12 @@ def generate_launch_description():
         DeclareLaunchArgument("start_enabled", default_value="true",
                               description="controller drives as soon as it has a pose"),
         DeclareLaunchArgument("adaptive", default_value="false",
-                              description="run the adaptive path estimator next to the "
-                              "controller"),
+                              description="run an adaptive estimator next to the "
+                              "controller: false, path or fiducial"),
+        DeclareLaunchArgument("fiducial",
+                              default_value=os.path.join(share, "config", "fiducial.yaml"),
+                              description="camera and marker file of the fiducial "
+                              "estimator"),
 
         ign_partition(),
         GroupAction([

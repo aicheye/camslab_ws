@@ -4,11 +4,10 @@ import asyncio
 import dataclasses
 import logging
 
-from camslab.adaptive import COLUMNS, Estimator
 from camslab_webui.random_trajectory import path_inside, random_params
 from camslab_webui.server import Backend, adaptive_config, hello_msg, samples_msg, status_msg
 
-from .simulate import simulate
+from .simulate import ESTIMATORS, make_observer, simulate
 from camslab.trajectory import check_limits, make_shape, sample_path
 from camslab.types import SHAPES, Params, State
 
@@ -18,13 +17,13 @@ RANDOM_TRIES = 50
 
 
 class SimBackend(Backend):
-    def __init__(self, params: Params, initial, dt, t_max, adaptive=False):
+    def __init__(self, params: Params, initial, dt, t_max, adaptive=""):
         self.server = None
         self.params = params
         self.initial = dict(initial)
         self.dt = dt
         self.t_max = t_max
-        self.adaptive = adaptive
+        self.adaptive = adaptive or ""
         self.samples = []
         self.status = status_msg("idle")
 
@@ -43,7 +42,10 @@ class SimBackend(Backend):
 
     def _adaptive(self):
         """The estimator's columns when it runs."""
-        return adaptive_config(self.adaptive, COLUMNS if self.adaptive else ())
+        observer = make_observer(self.adaptive, self.params)
+        fields = () if observer is None else observer.fields
+        plot = None if observer is None else observer.plot
+        return adaptive_config(self.adaptive, fields, plot=plot)
 
     def on_connect(self):
         return [hello_msg("Offline sim (Python)", "batch", True), self._config(),
@@ -64,7 +66,10 @@ class SimBackend(Backend):
                     make_shape(dataclasses.replace(self.params, control_points=points))
                     self.params.control_points = points
                 elif key == "adaptive":
-                    self.adaptive = bool(value)
+                    if value and value not in ESTIMATORS:
+                        raise ValueError(f"adaptive must be one of {ESTIMATORS} or empty, "
+                                         f"got {value!r}")
+                    self.adaptive = value or ""
                 elif key in ("dt", "t_max"):
                     setattr(self, key, float(value))
                 elif hasattr(self.params, key):
@@ -122,9 +127,9 @@ class SimBackend(Backend):
         except NotImplementedError:
             pass
         try:
-            estimator = Estimator(self.params) if self.adaptive else None
+            observer = make_observer(self.adaptive, self.params)
             self.samples = await loop.run_in_executor(
-                None, simulate, initial, self.params, self.dt, self.t_max, estimator)
+                None, simulate, initial, self.params, self.dt, self.t_max, observer)
         except (NotImplementedError, ValueError) as exc:
             self.status = status_msg("error", str(exc))
         except Exception as exc:

@@ -55,5 +55,5 @@ uv run --no-project --with-requirements docs/requirements.txt \
 |---|---|
 | `camslab/` | Python ROS 2 nodes, control law, trajectories, adaptive estimators, Gazebo model, launch files, and configuration |
 | `camslab_webui/` | shared web UI and backend |
-| `camslab_offline/` | offline experiments without ROS: tracking, mass-spring-damper estimation, circular path identification |
+| `camslab_offline/` | offline experiments without ROS: tracking, mass-spring-damper estimation, circular path identification, fiducial surveying |
 | `docs/` | user and developer documentation |
