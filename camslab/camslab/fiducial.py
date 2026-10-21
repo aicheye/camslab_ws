@@ -1,7 +1,8 @@
 """Simultaneous camera-extrinsic calibration and fiducial surveying under planar motion,
 after Choopojcharoen and Fidan, "Simultaneous Cascaded Adaptive Camera Calibration and
 Robot-Assisted Fiducial Surveying under Planar Motion" (ECC 2027). Equation numbers below
-refer to that paper. See docs/fiducial-hints.md.
+refer to that paper. The functions marked "Step n" are the exercise: see
+docs/fiducial-hints.md for the order and the tests that check each one.
 
 Frames: {W} world (the map), {R} robot, {C} camera, {M_j} marker j. A pose A_T_B is a 4x4
 homogeneous matrix mapping coordinates of {B} to {A}. The unknowns are the camera extrinsic
@@ -56,9 +57,8 @@ def skew(v: np.ndarray) -> np.ndarray:
 
 
 def cayley_rotation(g: np.ndarray) -> np.ndarray:
-    """R(g) = (I + [g]_x)(I - [g]_x)^-1, eq. (2). g = tan(angle / 2) axis."""
-    S = skew(g)
-    return (I3 + S) @ np.linalg.inv(I3 - S)
+    """R(g), the rotation matrix of the Cayley vector g, eq. (2). Step 1."""
+    raise NotImplementedError("step 1")
 
 
 def rotation_cayley(R: np.ndarray) -> np.ndarray:
@@ -69,16 +69,14 @@ def rotation_cayley(R: np.ndarray) -> np.ndarray:
 
 
 def compose(g1: np.ndarray, g2: np.ndarray) -> np.ndarray:
-    """g1 (+) g2, the Cayley vector of R(g1) R(g2), eq. (3)."""
-    return (g1 + g2 + np.cross(g1, g2)) / (1.0 - g1 @ g2)
+    """g1 (+) g2, the Cayley vector of R(g1) R(g2), eq. (3). Step 1."""
+    raise NotImplementedError("step 1")
 
 
 def rotate(g: np.ndarray, v: np.ndarray) -> np.ndarray:
-    """R(g, v) = R(g) v without building the matrix, eq. (4). v may be one vector or an
-    (n, 3) array of vectors."""
-    v = np.asarray(v, float)
-    gg = g @ g
-    return ((1.0 - gg) * v + 2.0 * np.multiply.outer(v @ g, g) + 2.0 * np.cross(g, v)) / (1.0 + gg)
+    """R(g, v) = R(g) v without building the matrix, eq. (4). v is one vector or an
+    (n, 3) array of vectors, one per row. Step 1."""
+    raise NotImplementedError("step 1")
 
 
 def rotation_angle(R: np.ndarray) -> float:
@@ -220,55 +218,57 @@ def errors(estimate: np.ndarray, truth: np.ndarray, n_markers: int) -> np.ndarra
 
 def rotation_regression(p: np.ndarray, q: np.ndarray) -> tuple:
     """(Phi^R, y^R) of eq. (7) from the Cayley vectors p of R_A and q of R_B of a pair
-    with relative rotation: [p + q]_x x = q - p."""
-    return skew(p + q), q - p
+    with relative rotation, so that Phi^R x = y^R. Step 2."""
+    raise NotImplementedError("step 2")
 
 
 def translation_regression(u: np.ndarray, d: np.ndarray) -> tuple:
     """(Phi^T, y^T) of eq. (8) from a pair with unchanged robot orientation: d is the
     robot displacement in the robot frame and u the relative marker translation in the
-    camera frame, d = R(x) u, so [u + d]_x x = u - d."""
-    return skew(u + d), u - d
+    camera frame, so that Phi^T x = y^T. Step 2."""
+    raise NotImplementedError("step 2")
 
 
 def information(Phi: np.ndarray, y: np.ndarray) -> tuple:
-    """(G, h) of eq. (11) from stacked regressors Phi (n, 3, 3) and outputs y (n, 3)."""
-    G = np.einsum("nki,nkj->ij", Phi, Phi)
-    h = np.einsum("nki,nk->i", Phi, y)
-    return G, h
+    """(G, h) of eq. (11) from stacked regressors Phi (n, 3, 3) and outputs y (n, 3).
+    Step 3."""
+    raise NotImplementedError("step 3")
 
 
 def height_output(x: np.ndarray, h: np.ndarray, p_z: np.ndarray, z: np.ndarray) -> np.ndarray:
     """y^h of eq. (18) for stacked height observations: the known marker heights h (n,),
     the robot heights p_z (n,) and the marker positions in the camera frame z (n, 3).
-    y^h = h - p_z - e_3^T R(x) z = e_3^T t_X."""
-    return h - p_z - rotate(x, z)[:, 2]
+    Returns (n,). Step 4."""
+    raise NotImplementedError("step 4")
 
 
 def translation_information(Phi_t: np.ndarray, n_heights: int) -> np.ndarray:
     """G_t of eq. (19) from the stacked relative-pose regressors Phi_t (n, 3, 3) and the
-    number of height observations."""
-    return np.einsum("nki,nkj->ij", Phi_t, Phi_t) + n_heights * np.outer(E3, E3)
+    number of height observations. Step 4."""
+    raise NotImplementedError("step 4")
 
 
 def translation_rhs(x: np.ndarray, Phi_t: np.ndarray, t_A: np.ndarray, t_B: np.ndarray,
                     h: np.ndarray, p_z: np.ndarray, z: np.ndarray) -> np.ndarray:
-    """h_t(x) of eq. (20), re-evaluated from the stored raw data at the orientation x."""
-    y_t = rotate(x, t_B) - t_A
-    return np.einsum("nki,nk->i", Phi_t, y_t) + E3 * np.sum(height_output(x, h, p_z, z))
+    """h_t(x) of eq. (20), re-evaluated from the stored raw data at the orientation x:
+    Phi_t (n, 3, 3), t_A (n, 3), t_B (n, 3), and the height data as in height_output().
+    Step 4."""
+    raise NotImplementedError("step 4")
 
 
 def marker_orientation_observation(R_R: np.ndarray, x: np.ndarray, R_b: np.ndarray) -> np.ndarray:
-    """m_obs of eq. (23): the Cayley vector of R(a) R(x) R(b), with the robot rotation
-    R(a) = R_R and the marker rotation in the camera frame R(b) = R_b given as matrices,
-    so the robot's heading may pass through pi."""
-    return rotation_cayley(R_R @ cayley_rotation(x) @ R_b)
+    """m_obs of eq. (23) with the robot rotation R(a) = R_R and the marker rotation in the
+    camera frame R(b) = R_b given as matrices. Compose matrices and convert once, so the
+    robot's heading may pass through pi. Step 5."""
+    raise NotImplementedError("step 5")
 
 
 def marker_position_observation(p_R: np.ndarray, R_R: np.ndarray, x: np.ndarray,
                                 t_X: np.ndarray, z: np.ndarray) -> np.ndarray:
-    """t_obs of eq. (25): p_R + R(a) (t_X + R(x) z)."""
-    return p_R + R_R @ (t_X + rotate(x, z))
+    """t_obs of eq. (25) from the robot position p_R and rotation R_R, the camera
+    orientation x and position t_X, and the marker position z in the camera frame.
+    Step 5."""
+    raise NotImplementedError("step 5")
 
 
 # --- The estimator (Sections III to V and VII) ------------------------------------------
@@ -444,32 +444,21 @@ class Estimator:
 
     def dynamics(self, X: np.ndarray, tick: Tick) -> np.ndarray:
         """dX/dt: eq. (14) for x_hat, eq. (21) for tX_hat, eq. (24) and (26) for the
-        markers, in the layout of dynamics() on slide 46."""
+        markers, in the layout of dynamics() on slide 46. Step 6.
+
+        X = [x_hat (3), tX_hat (3), m_hat (3 n), t_hat (3 n)]. Run eq. (14) only while
+        tick.ready_x and eq. (21) only while tick.ready_t, with zero derivative
+        otherwise. tick.chi[j] is the visibility of marker j, tick.R_b[j] and tick.z[j]
+        its current observation. The gains are self.gamma_x, self.gamma_t, self.gamma_m
+        and self.gamma_j.
+        """
         n = self.n
         x_hat = X[0:3]
         tX_hat = X[3:6]
         m_hat = X[6:6 + 3 * n].reshape(n, 3)
         t_hat = X[6 + 3 * n:].reshape(n, 3)
 
-        dx_hat = np.zeros(3)
-        if tick.ready_x:
-            dx_hat = self.gamma_x * np.linalg.solve(tick.G_x, tick.h_x - tick.G_x @ x_hat)
-
-        dtX_hat = np.zeros(3)
-        if tick.ready_t:
-            h_t = translation_rhs(x_hat, tick.Phi_t, tick.t_A, tick.t_B, tick.h, tick.p_z,
-                                  tick.z_h)
-            dtX_hat = self.gamma_t * np.linalg.solve(tick.G_t, h_t - tick.G_t @ tX_hat)
-
-        dm_hat = np.zeros((n, 3))
-        dt_hat = np.zeros((n, 3))
-        for j in np.flatnonzero(tick.chi):
-            m_obs = marker_orientation_observation(tick.R_R, x_hat, tick.R_b[j])
-            t_obs = marker_position_observation(tick.p_R, tick.R_R, x_hat, tX_hat, tick.z[j])
-            dm_hat[j] = self.gamma_m * tick.chi[j] * (m_obs - m_hat[j])
-            dt_hat[j] = self.gamma_j * tick.chi[j] * (t_obs - t_hat[j])
-
-        return np.concatenate((dx_hat, dtX_hat, dm_hat.ravel(), dt_hat.ravel()))
+        raise NotImplementedError("step 6")
 
     def update(self, T_R: np.ndarray, observations: dict, dt: float) -> None:
         """One camera sample: robot pose W_T_R and {j: C_T_Mj} of the visible markers,
