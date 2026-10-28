@@ -4,11 +4,11 @@ The plant is `m x'' + b x' + k x = u` with `theta* = [m, b, k]` unknown. The est
 reads `x` and `u` only. The method follows slides 45-47 of the estimation deck: the plant,
 two repeated-pole filters, and the gradient law are integrated as one ODE with `solve_ivp`.
 
-Run everything from `camslab_offline/`:
+Run everything from `camslab_standalone/`:
 
     uv run pytest tests/msd
-    uv run python -m camslab_offline.msd            # plot of theta(t)
-    uv run python -m camslab_offline.msd --no-plot
+    uv run python -m camslab_standalone.msd            # plot of theta(t)
+    uv run python -m camslab_standalone.msd --no-plot
 
 ## Implementation
 

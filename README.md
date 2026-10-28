@@ -1,7 +1,7 @@
 # camslab_ws
 
 Run trajectory-tracking experiments for the lab's Yahboom ROSMASTER R2 cars and DJI
-RoboMaster S1. The project provides an offline Python simulator, a Gazebo/RViz simulator,
+RoboMaster S1. The project provides a standalone Python simulator (no ROS), a Gazebo/RViz simulator,
 and a ROS 2 controller for the real S1.
 
 ## Start here
@@ -28,14 +28,14 @@ source install/setup.bash
 ros2 launch camslab gazebo_multi.launch.py
 ```
 
-Open <http://localhost:8000>. Press **Start** in the web UI, then inspect the run in RViz
+Open <http://127.0.0.1:8000>. Press **Start** in the web UI, then inspect the run in RViz
 and download the CSV from the web UI.
 
 ## Simulation modes
 
 | Mode | Command | Purpose |
 |---|---|---|
-| Offline Python | `cd camslab_offline && uv run python -m camslab_offline.tracking` | Test the plant and trajectories without ROS or Gazebo. |
+| Standalone Python | `cd camslab_standalone && uv run python -m camslab_standalone.tracking` | Test the plant and trajectories without ROS or Gazebo. |
 | Gazebo + RViz | `ros2 launch camslab gazebo_multi.launch.py` | Test the R2 model with ROS 2. |
 | Real S1 | `ros2 launch camslab live.launch.py` | Run the ROS 2 controller with mocap and the S1 driver. |
 
@@ -55,5 +55,5 @@ uv run --no-project --with-requirements docs/requirements.txt \
 |---|---|
 | `camslab/` | Python ROS 2 nodes, control law, trajectories, adaptive estimators, Gazebo model, launch files, and configuration |
 | `camslab_webui/` | shared web UI and backend |
-| `camslab_offline/` | offline experiments without ROS: tracking, mass-spring-damper estimation, circular path identification, fiducial surveying |
+| `camslab_standalone/` | standalone Python experiments, no ROS: tracking, mass-spring-damper estimation, circular path identification, fiducial surveying |
 | `docs/` | user and developer documentation |

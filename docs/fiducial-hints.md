@@ -15,17 +15,24 @@ from the true poses and reports the markers inside the field of view.
 
 `camslab/camslab/fiducial.py` holds the sensor, the data handling and the estimator loop.
 The mathematics of the paper is left as stubs that raise `NotImplementedError`. Each step
-below names the stubs and the tests that check them. The tests run from `camslab_offline/`:
+below names the stubs and the tests that check them. The tests run from `camslab_standalone/`:
 
     uv run pytest tests/fiducial -x          # stops at the first failing step
     uv run pytest tests/fiducial tests/tracking/test_fiducial_sim.py
-    uv run python -m camslab_offline.fiducial            # the paper's study, Fig. 1
-    uv run python -m camslab_offline.fiducial --runs 20  # with the paper's noise
-    uv run python -m camslab_offline.tracking --adaptive fiducial --shape gerono
+    uv run python -m camslab_standalone.fiducial            # the paper's study, Fig. 1
+    uv run python -m camslab_standalone.fiducial --runs 20  # with the paper's noise
+    uv run python -m camslab_standalone.tracking --adaptive fiducial --shape bowtie
 
 In Gazebo, set `adaptive: fiducial` in `camslab/config/sim.yaml` or pass
 `adaptive:=fiducial`. RViz shows the true markers and camera in grey and the estimates in
-green. The web UI plots the camera parameters and draws the marker estimates on the map.
+green, with the four errors of the paper's Fig. 1 as text above the car. The web UI plots
+those four errors, `||x~||`, `||t~_X||`, `max_j ||m~_j||` and `max_j ||t~_j||`, on a log
+axis as in Fig. 1, and draws the marker estimates on the map. The camera transform
+accuracy is the pair of camera curves; the plot goes to zero without noise. A second
+plot shows the excitation: `lambda_min(G_x)` and `lambda_min(G_t)` of eqs. (11) and (19)
+against the gates `alpha_x` and `alpha_t`. The camera laws switch on where a curve crosses
+its dashed line, and the tooltip counts the stored rotation pairs, translation pairs and
+height observations.
 
 ## Frames and notation
 
@@ -69,7 +76,10 @@ are needed: every yaw-only pair shares one unexcited direction.
 
 Stub: `information(Phi, y)`, eq. (11), for stacked regressors `Phi` of shape `(n, 3, 3)`
 and outputs `y` of shape `(n, 3)`. Return `(G_x, h_x)`. `np.einsum` does this in one line
-each; a loop is fine too.
+each; a loop is fine too. The estimator calls it with `n = 1` when it stores a pair and
+adds the result to the running sums of the history, so `G_x` and `h_x` are never
+recomputed from the whole history; `translation_information()` of step 4 is used the
+same way for `G_t`.
 
 Test: `test_information_is_the_sum_of_normal_equations`.
 
@@ -126,8 +136,9 @@ Tests: `test_study_converges_without_noise` (every error below 1e-6 after the pa
 
 - `Scene`: the truth and the sensor. `Scene.truth()` is only used for the error columns
   and the dashed lines.
-- `History`: a bounded history that replaces the entry whose removal lowers
-  `lambda_min(G)` the least, Section VII step 2.
+- `History`: a bounded history with running sums of its entries' `(G_i, h_i)`: `push()`
+  adds, `pop()` subtracts, and when full `push()` first pops the entry whose removal
+  lowers `lambda_min(G)` the least, Section VII step 2.
 - `Estimator.ingest()`: pair selection. Every `d_step` of travel, each visible marker is
   paired with its earlier observations over the last `l_buffer` of travel: the farthest
   partner with a relative rotation below `straight_tol` gives a pure-translation pair,
@@ -143,7 +154,9 @@ Tests: `test_study_converges_without_noise` (every error below 1e-6 after the pa
   orientation never becomes ready, because the car never repeats a heading at a distance,
   so there are no pure-translation pairs. The Gerono lemniscate has them around its
   crossing. A spline with four or more collinear control points in a row has exact
-  straight stretches.
+  straight stretches. The `bowtie` shape, a double triangle, is the closest to the
+  paper's study: straight edges and corners that turn by more than 90 degrees to the
+  right and to the left.
 - Set `fov` in `Scene` or `config/fiducial.yaml` to 2.1 rad (120 degrees) and `range` to
   5 m. The markers come and go, and on the Gerono no marker is seen at equal headings
   on both sides of the crossing, so `x` stays unidentified; the rounded-rectangle spline

@@ -5,7 +5,7 @@ import math
 import numpy as np
 import pytest
 
-from camslab_offline.tracking.simulate import simulate
+from camslab_standalone.tracking.simulate import simulate
 from camslab.types import Params, State
 
 INITIAL = [(2.0, 1.0, 0.0), (1.0, 0.5, 90.0), (3.0, 2.5, 180.0), (0.5, 2.0, -135.0)]

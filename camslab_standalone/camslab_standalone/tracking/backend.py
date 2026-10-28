@@ -1,31 +1,52 @@
-"""Web UI backend for the offline sim."""
+"""Web UI backend for the standalone sim: the car drives in real time and the samples
+stream to the browser as they are computed, like the Gazebo bridge."""
 
 import asyncio
 import dataclasses
 import logging
+import time
+
+import numpy as np
 
 from camslab_webui.random_trajectory import path_inside, random_params
-from camslab_webui.server import Backend, adaptive_config, hello_msg, samples_msg, status_msg
+from camslab_webui.server import (Backend, adaptive_config, hello_msg, history_msgs, samples_msg,
+                                  status_msg)
 
-from .simulate import ESTIMATORS, make_observer, simulate
-from camslab.trajectory import check_limits, make_shape, sample_path
+from .simulate import ESTIMATORS, make_observer, simulate_steps
+from camslab.trajectory import check_limits, make_shape, reference, sample_path
 from camslab.types import SHAPES, Params, State
 
-log = logging.getLogger("camslab_offline.tracking")
+log = logging.getLogger("camslab_standalone.tracking")
 
 RANDOM_TRIES = 50
 
 
 class SimBackend(Backend):
-    def __init__(self, params: Params, initial, dt, t_max, adaptive=""):
+    def __init__(self, params: Params, initial, dt, t_max, adaptive="", seed=None):
+        """initial is {x, y, theta} or None for the start of the path. seed seeds the
+        random camera and markers of the fiducial estimator, a new draw every run."""
         self.server = None
         self.params = params
-        self.initial = dict(initial)
+        self.rng = np.random.default_rng(seed)
+        self.initial = dict(initial) if initial else self._path_start()
+        self.start_on_path = initial is None
+        self.randomize_on_start = False
         self.dt = dt
         self.t_max = t_max
         self.adaptive = adaptive or ""
         self.samples = []
         self.status = status_msg("idle")
+        self.running = False
+        self.stop_requested = False
+
+    def _path_start(self):
+        """{x, y, theta} of p*(0) and q*(0), or the area's corner until the path exists."""
+        try:
+            ref = reference(make_shape(self.params), 0.0)
+        except (NotImplementedError, ValueError):
+            return {"x": 0.5, "y": 0.5, "theta": 0.0}
+        return {"x": round(float(ref.p[0]), 4), "y": round(float(ref.p[1]), 4),
+                "theta": round(float(np.arctan2(ref.q[1], ref.q[0])), 4)}
 
     def _path(self):
         """p*(t) over [0, t_max] for the map, or [] until position() is written."""
@@ -43,13 +64,13 @@ class SimBackend(Backend):
     def _adaptive(self):
         """The estimator's columns when it runs."""
         observer = make_observer(self.adaptive, self.params)
-        fields = () if observer is None else observer.fields
-        plot = None if observer is None else observer.plot
-        return adaptive_config(self.adaptive, fields, plot=plot)
+        if observer is None:
+            return adaptive_config(self.adaptive)
+        return adaptive_config(self.adaptive, observer.fields, plots=observer.plots)
 
     def on_connect(self):
-        return [hello_msg("Offline sim (Python)", "batch", True), self._config(),
-                samples_msg(self.samples, reset=True), self.status]
+        return [hello_msg("Standalone sim (Python)", "live", True), self._config(),
+                *history_msgs(list(self.samples)), self.status]
 
     async def on_message(self, msg):
         kind = msg.get("type")
@@ -79,9 +100,16 @@ class SimBackend(Backend):
             await self.server.broadcast(samples_msg([], reset=True))
             await self.server.broadcast(self.status)
         elif kind == "start":
-            await self._run()
+            self.start_on_path = bool(msg.get("on_path", False))
+            self.randomize_on_start = bool(msg.get("randomize", False))
+            if not self.running:
+                asyncio.get_running_loop().create_task(self._run())
+            return
+        elif kind == "stop":
+            self.stop_requested = True
             return
         elif kind == "reset":
+            self.stop_requested = True
             self.samples = []
             self.status = status_msg("idle")
             await self.server.broadcast(samples_msg([], reset=True))
@@ -115,30 +143,56 @@ class SimBackend(Backend):
     async def _run(self):
         if self.dt <= 0 or self.t_max <= 0:
             raise ValueError("dt and t_max must be positive")
-        await self.server.broadcast(status_msg("running"))
-        await self.server.broadcast(self._config())
-        initial = State.from_pose(**self.initial)
-        loop = asyncio.get_running_loop()
+        self.running = True
+        self.stop_requested = False
+        self.samples = []
         warning = ""
         try:
-            check_limits(make_shape(self.params), self.params, self.t_max)
-        except ValueError as exc:
-            warning = f"; the car cannot track the whole trajectory: {exc}"
-        except NotImplementedError:
-            pass
-        try:
-            observer = make_observer(self.adaptive, self.params)
-            self.samples = await loop.run_in_executor(
-                None, simulate, initial, self.params, self.dt, self.t_max, observer)
+            if self.randomize_on_start:
+                self._randomize()
+            if self.start_on_path:
+                self.initial = self._path_start()
+            await self.server.broadcast(status_msg("running"))
+            await self.server.broadcast(self._config())
+            await self.server.broadcast(samples_msg([], reset=True))
+            try:
+                check_limits(make_shape(self.params), self.params, self.t_max)
+            except ValueError as exc:
+                warning = f"; the car cannot track the whole trajectory: {exc}"
+            except NotImplementedError:
+                pass
+            initial = State.from_pose(**self.initial)
+            observer = make_observer(self.adaptive, self.params, self.rng)
+            await asyncio.get_running_loop().run_in_executor(None, self._drive, initial, observer)
         except (NotImplementedError, ValueError) as exc:
             self.status = status_msg("error", str(exc))
         except Exception as exc:
             log.exception("simulation failed")
             self.status = status_msg("error", repr(exc))
         else:
-            last = self.samples[-1]
-            self.status = status_msg(
-                "idle", f"||p* - p|| = {last[7]:.3f} m at t = {last[0]:.2f} s, "
-                        f"{len(self.samples)} samples{warning}")
-            await self.server.broadcast(samples_msg(self.samples, reset=True))
+            if self.samples:
+                last = self.samples[-1]
+                stopped = " (stopped)" if self.stop_requested else ""
+                self.status = status_msg(
+                    "idle", f"||p* - p|| = {last[7]:.3f} m at t = {last[0]:.2f} s{stopped}, "
+                            f"{len(self.samples)} samples{warning}")
+            else:
+                self.status = status_msg("idle")
+        finally:
+            self.running = False
         await self.server.broadcast(self.status)
+
+    def _drive(self, initial, observer):
+        """In a worker thread: step the sim at 1 / dt, paced to wall-clock time, and send
+        every row to the browsers as it is computed. A step that takes longer than dt
+        is sent as soon as it is done, so the sim runs slower than real time but stays
+        smooth."""
+        start = time.perf_counter()
+        for row in simulate_steps(initial, self.params, self.dt, self.t_max, observer):
+            if self.stop_requested:
+                break
+            self.samples.append(row)
+            self.server.broadcast_threadsafe(samples_msg([row]))
+            lag = start + row[0] - time.perf_counter()
+            if lag > 0:
+                time.sleep(lag)

@@ -5,7 +5,7 @@ import math
 import numpy as np
 import pytest
 
-from camslab_offline.common.unicycle import step
+from camslab_standalone.common.unicycle import step
 from camslab.types import State
 
 

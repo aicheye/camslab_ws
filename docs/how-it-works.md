@@ -13,7 +13,7 @@ Gazebo / mocap
       └── safety_polytope ───► RViz and web UI
 ```
 
-The offline simulator uses the same reference and control concepts without ROS or
+The standalone simulator uses the same reference and control concepts without ROS or
 Gazebo. The web UI changes parameters and displays the resulting run; it does not replace
 the controller's safety checks.
 

@@ -3,7 +3,7 @@
 import numpy as np
 import pytest
 
-from camslab_offline.path_circle.circle import Circle, filter_matrices, run
+from camslab_standalone.path_circle.circle import Circle, filter_matrices, run
 
 
 def test_filter_matrices_match_slide_47():

@@ -9,36 +9,36 @@ Use this page for package layout, simulation internals, and ROS interfaces. Star
 |---|---|
 | `camslab/` | Python ROS 2 package: the shared library (`types`, `trajectory`, `controller`, `safety`, `adaptive`), the nodes `controller`, `pose_tf` and `estimator`, launch files, Gazebo model, and RViz config |
 | `camslab_webui/` | shared web UI backend, frontend, and safety-polytope logic |
-| `camslab_offline/` | offline experiments without ROS, one subpackage each, with shared code in `common/` |
+| `camslab_standalone/` | standalone Python experiments, no ROS, one subpackage each, with shared code in `common/` |
 | `docs/` | user and developer documentation |
 
-`camslab_offline/` contains `COLCON_IGNORE` and is not built by colcon. It is a uv project
-that imports `camslab` and `camslab_webui` from the repository, so the offline experiments
+`camslab_standalone/` contains `COLCON_IGNORE` and is not built by colcon. It is a uv project
+that imports `camslab` and `camslab_webui` from the repository, so the standalone experiments
 and the ROS nodes run the same control law, trajectories, and estimators.
 
-| Experiment | Command, from `camslab_offline/` | Tests |
+| Experiment | Command, from `camslab_standalone/` | Tests |
 |---|---|---|
-| Trajectory tracking with the web UI | `uv run python -m camslab_offline.tracking` | `tests/tracking` |
-| Mass-spring-damper estimation | `uv run python -m camslab_offline.msd` | `tests/msd` |
-| Circular path identification | `uv run python -m camslab_offline.path_circle` | `tests/path_circle` |
-| Fiducial surveying study | `uv run python -m camslab_offline.fiducial` | `tests/fiducial` |
+| Trajectory tracking with the web UI | `uv run python -m camslab_standalone.tracking` | `tests/tracking` |
+| Mass-spring-damper estimation | `uv run python -m camslab_standalone.msd` | `tests/msd` |
+| Circular path identification | `uv run python -m camslab_standalone.path_circle` | `tests/path_circle` |
+| Fiducial surveying study | `uv run python -m camslab_standalone.fiducial` | `tests/fiducial` |
 
 `common/unicycle.py` holds the unicycle plant and the command clamp.
 
-## Offline simulator
+## Standalone simulator
 
-Run the tracking simulator from `camslab_offline/`:
+Run the tracking simulator from `camslab_standalone/`:
 
 ```bash
-uv run python -m camslab_offline.tracking
-uv run python -m camslab_offline.tracking --shape gerono
-uv run python -m camslab_offline.tracking --csv run.csv
+uv run python -m camslab_standalone.tracking
+uv run python -m camslab_standalone.tracking --shape gerono
+uv run python -m camslab_standalone.tracking --csv run.csv
 uv run pytest
 ```
 
 Use `--initial X Y THETA_DEG` or `--seed N` for repeatable starts. The fixed-step loop
 evaluates the reference, samples and clamps the command, holds it over `dt`, and calls
-`step()`. The default `dt = 0.02 s` matches the ROS controller's 50 Hz rate.
+`step()`. The default `dt = 0.005 s` runs the standalone sim at 200 Hz; the ROS controller runs at 50 Hz, so pass `--dt 0.02` to match it.
 
 Tests cover the plant, trajectory derivatives, reference generation, limit checks, and
 tracking. Rectangle tracking is excluded because its instantaneous 90-degree corners
@@ -73,11 +73,11 @@ not change the commands. Two estimators exist.
 | `path` | `camslab/camslab/adaptive.py` | the circle `[r, c_x, c_y]` that fits the path near the robot |
 | `fiducial` | `camslab/camslab/fiducial.py` | the camera extrinsic `(x, t_X)` and the world pose `(m_j, t_j)` of every fiducial marker |
 
-Offline simulator:
+Standalone simulator:
 
 ```bash
-uv run python -m camslab_offline.tracking --adaptive path --csv run.csv
-uv run python -m camslab_offline.tracking --adaptive fiducial --shape gerono --csv run.csv
+uv run python -m camslab_standalone.tracking --adaptive path --csv run.csv
+uv run python -m camslab_standalone.tracking --adaptive fiducial --shape gerono --csv run.csv
 ```
 
 The web UI has an **Adaptive estimator** box with a selector for the kind, and a plot of
@@ -141,7 +141,7 @@ publishes `fiducials` (`visualization_msgs/MarkerArray`): the true markers and c
 grey, the estimates in green, shown in RViz.
 
 The scene for Gazebo is in `camslab/config/fiducial.yaml`, with the estimator gains and
-the pair-selection thresholds. The offline simulator uses the same default scene.
+the pair-selection thresholds. The standalone simulator uses the same default scene.
 
 The camera orientation needs both relative-yaw pairs and pure-translation pairs of
 observations. Trajectories with straight stretches identify everything: the Gerono
@@ -150,7 +150,7 @@ the robot never drives straight, so `x` stays at its initial value and the downs
 estimates keep the resulting bias; that is the planar-motion limitation discussed in the
 paper.
 
-`python -m camslab_offline.fiducial` replays the paper's simulation study: 35 s of
+`python -m camslab_standalone.fiducial` replays the paper's simulation study: 35 s of
 alternating straight segments and turns at 20 Hz, with the paper's camera and markers.
 `--runs N` adds the paper's measurement noise and reports the root-mean-square error over
 N runs. The covariance radii of the paper are not computed.
@@ -194,5 +194,5 @@ The live fleet stream sends samples at 25 Hz. CSV fields are `t`, `x`, `y`, `qx`
 3. Keep command saturation, stale-pose handling, and safety-polytope checks outside the
    experimental control law.
 4. Add or update tests before changing the launch configuration.
-5. Run `uv run pytest` in `camslab_offline/`. With `colcon build --symlink-install`, a
+5. Run `uv run pytest` in `camslab_standalone/`. With `colcon build --symlink-install`, a
    Python change needs no rebuild.

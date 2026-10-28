@@ -1,11 +1,10 @@
-"""Trajectory tracking: python -m camslab_offline.tracking [--csv PATH] [--adaptive KIND]."""
+"""Trajectory tracking: python -m camslab_standalone.tracking [--csv PATH] [--adaptive KIND]."""
 
 import argparse
 import csv
 import dataclasses
 import logging
 import math
-import random
 
 from camslab_webui.server import SAMPLE_FIELDS, UiServer
 
@@ -15,15 +14,15 @@ from camslab.types import SHAPES, Params, State
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="camslab_offline.tracking", description=__doc__,
+    ap = argparse.ArgumentParser(prog="camslab_standalone.tracking", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--initial", type=float, nargs=3, metavar=("X", "Y", "THETA_DEG"),
-                    help="default: random, x and y in [0, RANGE], any heading")
-    ap.add_argument("--random-range", type=float, default=4.0, metavar="RANGE")
-    ap.add_argument("--seed", type=int, help="seed for the random initial pose")
-    ap.add_argument("--dt", type=float, default=0.02)
+                    help="default: on the path, at p*(0) heading along q*(0)")
+    ap.add_argument("--seed", type=int,
+                    help="seed for the random camera and markers of the fiducial estimator")
+    ap.add_argument("--dt", type=float, default=0.005, help="sim step [s], default 200 Hz")
     ap.add_argument("--t-max", type=float, default=60.0)
     for field in dataclasses.fields(Params):
         flag = "--" + field.name.replace("_", "-")
@@ -43,18 +42,15 @@ def main():
 
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
     params = Params(**{f.name: getattr(args, f.name) for f in dataclasses.fields(Params)})
+    initial = None
     if args.initial:
         x, y, theta_deg = args.initial
         initial = {"x": x, "y": y, "theta": math.radians(theta_deg)}
-    else:
-        rng = random.Random(args.seed)
-        r = args.random_range
-        initial = {"x": round(rng.uniform(0, r), 2), "y": round(rng.uniform(0, r), 2),
-                   "theta": rng.uniform(-math.pi, math.pi)}
 
     if args.csv:
-        observer = make_observer(args.adaptive, params)
-        samples = simulate(State.from_pose(**initial), params, args.dt, args.t_max,
+        backend = SimBackend(params, initial, args.dt, args.t_max, args.adaptive, args.seed)
+        observer = make_observer(args.adaptive, params, backend.rng)
+        samples = simulate(State.from_pose(**backend.initial), params, args.dt, args.t_max,
                            observer)
         fields = SAMPLE_FIELDS + estimate_fields(observer)
         with open(args.csv, "w", newline="") as f:
@@ -68,7 +64,7 @@ def main():
                             for n, v in zip(estimate_fields(observer), last[10:])))
         return
 
-    backend = SimBackend(params, initial, args.dt, args.t_max, args.adaptive)
+    backend = SimBackend(params, initial, args.dt, args.t_max, args.adaptive, args.seed)
     backend.server = UiServer(backend, args.host, args.port)
     backend.server.run()
 

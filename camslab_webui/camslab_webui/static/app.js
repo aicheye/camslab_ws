@@ -13,10 +13,10 @@ const PARAM_LABELS = {
   theta0: 'θ0 [rad]',
   circle_speed: 'circle speed [m/s]',
   kappa: 'circle κ [1/m]',
-  a: 'gerono / ellipse / rectangle a [m]',
-  b: 'ellipse / rectangle b [m]',
-  period: 'gerono / ellipse / rectangle / spline period [s]',
-  phi0: 'gerono / ellipse φ0 [rad]',
+  a: 'half-axis a [m]',
+  b: 'half-axis b [m]',
+  period: 'period [s]',
+  phi0: 'φ0 [rad]',
   k_par: 'k∥ [1/s]',
   k_perp: 'k⊥ [1/m²]',
   k_q: 'k_q [1/s]',
@@ -26,6 +26,21 @@ const PARAM_LABELS = {
   dt: 'dt [s]',
   t_max: 't max [s]',
 };
+
+// Legend and tooltip labels of estimate columns; other columns show their field name.
+const ESTIMATE_LABELS = {
+  e_x: '‖x̃‖',
+  e_tX: '‖t̃X‖ [m]',
+  e_m: 'max ‖m̃j‖',
+  e_t: 'max ‖t̃j‖ [m]',
+  lam_x: 'λmin(G_x)',
+  lam_t: 'λmin(G_t)',
+  n_x: 'orientation regressions',
+  n_t: 'translation tuples',
+  n_h: 'height observations',
+};
+const estimateLabel = (name) => ESTIMATE_LABELS[name] || name;
+const LOG_FLOOR = 1e-9;
 
 const STATUS_ICONS = { idle: '●', running: '▶', reached: '✓', error: '✕' };
 
@@ -62,7 +77,6 @@ const plots = [
   { canvas: $('plot-dist'), col: DIST, refs: () => [] },
   { canvas: $('plot-v'), col: V, refs: () => [] },
   { canvas: $('plot-w'), col: W, refs: () => [] },
-  { canvas: $('plot-estimates'), series: () => [], refs: () => [] },
 ];
 const ESTIMATE_COLORS = ['series-3', 'series-4', 'series-5', 'series-2'];
 
@@ -224,8 +238,13 @@ $('scrub').addEventListener('input', (ev) => {
 });
 
 $('start').addEventListener('click', () => {
-  if ($('init-random-on-start').checked && state.canSetPose) randomInitial();
-  send({ type: 'start' });
+  const onPath = $('init-on-path').checked && state.canSetPose;
+  send({ type: 'start', on_path: onPath, randomize: $('traj-random-on-start').checked });
+});
+try { $('traj-random-on-start').checked = localStorage.getItem('camslab-randomize-on-start') !== 'false'; }
+catch (err) { $('traj-random-on-start').checked = true; }
+$('traj-random-on-start').addEventListener('change', (ev) => {
+  try { localStorage.setItem('camslab-randomize-on-start', String(ev.target.checked)); } catch (err) { }
 });
 $('stop').addEventListener('click', () => send({ type: 'stop' }));
 $('reset').addEventListener('click', () => send({ type: 'reset' }));
@@ -257,10 +276,10 @@ function randomInitial() {
 }
 $('init-random').addEventListener('click', randomInitial);
 
-try { $('init-random-on-start').checked = localStorage.getItem('camslab-random-on-start') !== 'false'; }
-catch (err) { $('init-random-on-start').checked = true; }
-$('init-random-on-start').addEventListener('change', (ev) => {
-  try { localStorage.setItem('camslab-random-on-start', String(ev.target.checked)); } catch (err) { }
+try { $('init-on-path').checked = localStorage.getItem('camslab-on-path') !== 'false'; }
+catch (err) { $('init-on-path').checked = true; }
+$('init-on-path').addEventListener('change', (ev) => {
+  try { localStorage.setItem('camslab-on-path', String(ev.target.checked)); } catch (err) { }
 });
 
 function setValue(input, value) {
@@ -279,32 +298,55 @@ function fillSelect(select, values, labels = {}) {
   }));
 }
 
-function syncEstimatePlots(fields, plotted) {
-  const plot = plots[plots.length - 1];
-  $('estimates-figure').hidden = fields.length === 0;
-  const shown = (plotted || fields).filter((f) => fields.includes(f));
-  const names = [...new Set(shown.map((f) => f.replace(/_(hat|true)$/, '')))];
-  const color = (i) => colors[ESTIMATE_COLORS[i % ESTIMATE_COLORS.length]];
-  plot.series = () => shown.map((f) => ({
-    col: FIELDS.length + fields.indexOf(f),
-    color: color(names.indexOf(f.replace(/_(hat|true)$/, ''))),
-    dash: f.endsWith('_true') ? [5, 4] : null,
-  }));
-  const legend = $('estimate-legend');
-  if (legend.dataset.fields !== names.join(',')) {
-    legend.dataset.fields = names.join(',');
-    legend.replaceChildren(...names.map((name, i) => {
+// The estimator's time plots, one figure per entry of the config's plot list. Fields
+// ending in _true are dashed in the colour of their _hat; refs are dashed horizontal
+// lines, and refs with the same value share one line and one label ("α_x = α_t").
+function syncAdaptivePlots(a) {
+  const box = $('adaptive-plots');
+  const specs = (a.plots || []).map((p) => ({ ...p, fields: p.fields.filter((f) => a.fields.includes(f)) }))
+    .filter((p) => p.fields.length > 0);
+  const signature = JSON.stringify([a.fields, specs]);
+  if (box.dataset.signature === signature) return;
+  box.dataset.signature = signature;
+  for (let i = plots.length - 1; i >= 0; i--) if (plots[i].adaptive) plots.splice(i, 1);
+  box.replaceChildren();
+  for (const spec of specs) {
+    const names = [...new Set(spec.fields.map((f) => f.replace(/_(hat|true)$/, '')))];
+    const color = (f) => colors[ESTIMATE_COLORS[names.indexOf(f.replace(/_(hat|true)$/, '')) % ESTIMATE_COLORS.length]];
+    const figure = document.createElement('figure');
+    const caption = document.createElement('figcaption');
+    const legend = document.createElement('span');
+    legend.className = 'legend';
+    legend.replaceChildren(...names.map((name) => {
       const key = document.createElement('span');
       key.className = 'key';
       const swatch = document.createElement('span');
       swatch.className = 'swatch';
-      swatch.dataset.index = i;
-      key.append(swatch, name);
+      swatch.style.background = color(name);
+      key.append(swatch, estimateLabel(name));
       return key;
     }));
-  }
-  for (const swatch of legend.querySelectorAll('.swatch')) {
-    swatch.style.background = color(+swatch.dataset.index);
+    caption.append(spec.caption + ' ', legend);
+    const canvas = document.createElement('canvas');
+    canvas.className = 'plot';
+    figure.append(caption, canvas);
+    box.append(figure);
+    const refs = new Map();
+    for (const r of spec.refs || []) {
+      const got = refs.get(r.value);
+      if (got) got.label += ` = ${r.label}`;
+      else refs.set(r.value, { value: r.value, label: r.label, color: color(r.field) });
+    }
+    const plot = {
+      canvas, adaptive: true, log: !!spec.log,
+      series: () => spec.fields.map((f) => ({
+        col: FIELDS.length + a.fields.indexOf(f), color: color(f),
+        dash: f.endsWith('_true') ? [5, 4] : null,
+      })),
+      refs: () => [...refs.values()],
+    };
+    plots.push(plot);
+    addPlotListeners(plot);
   }
 }
 
@@ -316,7 +358,7 @@ function syncAdaptive() {
   fillSelect($('adaptive-kind'), Object.keys(kinds), kinds);
   $('adaptive-kind').value = a.kind || '';
   $('adaptive-kind').disabled = !a.editable;
-  syncEstimatePlots(a.fields, a.plot);
+  syncAdaptivePlots(a);
 }
 
 $('adaptive-kind').addEventListener('change', (ev) => {
@@ -336,8 +378,8 @@ function syncInputs() {
   syncSpline();
   if (typeof state.params.shape === 'string') setValue($('shape'), state.params.shape);
   if (state.initial) {
-    setValue($('init-x'), state.initial.x);
-    setValue($('init-y'), state.initial.y);
+    setValue($('init-x'), +state.initial.x.toFixed(3));
+    setValue($('init-y'), +state.initial.y.toFixed(3));
     setValue($('init-th'), +((state.initial.theta * 180) / Math.PI).toFixed(3));
   }
   const box = $('params');
@@ -780,6 +822,61 @@ function drawEstimatedMarkers(ctx, row) {
   }
 }
 
+// R(g) v for a Cayley vector g, eq. (4) of the fiducial paper.
+function cayleyRotate(g, v) {
+  const gg = g[0] * g[0] + g[1] * g[1] + g[2] * g[2];
+  const vg = v[0] * g[0] + v[1] * g[1] + v[2] * g[2];
+  const cross = [g[1] * v[2] - g[2] * v[1], g[2] * v[0] - g[0] * v[2], g[0] * v[1] - g[1] * v[0]];
+  return v.map((vi, i) => ((1 - gg) * vi + 2 * vg * g[i] + 2 * cross[i]) / (1 + gg));
+}
+
+// The camera of the fiducial estimator at the robot pose of `row`: world position and
+// x axis of the true extrinsic and of the estimate, or null without camera fields.
+function cameraPoses(row) {
+  const a = state.adaptive;
+  if (!a || !row || !a.fields.includes('tX_1_hat')) return null;
+  const at = (name) => row[FIELDS.length + a.fields.indexOf(name)];
+  const c = row[QX], s = row[QY];
+  const pose = (suffix) => {
+    const g = [at('x_1' + suffix), at('x_2' + suffix), at('x_3' + suffix)];
+    const t = [at('tX_1' + suffix), at('tX_2' + suffix), at('tX_3' + suffix)];
+    if (![...g, ...t].every(Number.isFinite)) return null;
+    const axis = cayleyRotate(g, [1, 0, 0]);
+    return { x: row[X] + c * t[0] - s * t[1], y: row[Y] + s * t[0] + c * t[1],
+             ax: c * axis[0] - s * axis[1], ay: s * axis[0] + c * axis[1], g, t };
+  };
+  return { hat: pose('_hat'), truth: pose('_true') };
+}
+
+function drawCamera(ctx, row) {
+  const cam = cameraPoses(row);
+  if (!cam) return;
+  const axisLength = 0.25;
+  const draw = (p, color, dash) => {
+    if (!p) return;
+    const x = view.sx(p.x), y = view.sy(p.y);
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash(dash);
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(view.sx(p.x + axisLength * p.ax), view.sy(p.y + axisLength * p.ay));
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.beginPath(); ctx.arc(x, y, 3.5, 0, 2 * Math.PI); ctx.fill();
+  };
+  draw(cam.truth, colors['text-muted'], []);
+  draw(cam.hat, colors['series-3'], [4, 3]);
+  const label = cam.hat || cam.truth;
+  if (label) {
+    ctx.fillStyle = colors['series-3'];
+    ctx.font = '11px system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText('camera', view.sx(label.x) + 6, view.sy(label.y) - 6);
+  }
+}
+
 function drawPolytope(ctx) {
   const outline = (poly) => {
     ctx.beginPath();
@@ -873,11 +970,15 @@ function drawTrail(ctx, from, to, alpha, rows = state.samples, color = colors['s
   ctx.lineWidth = 2;
   ctx.lineJoin = 'round';
   ctx.beginPath();
-  for (let i = from; i <= to; i++) {
-    const s = rows[i];
+  // At 200 Hz a minute is 12000 rows; a few thousand points per trail is enough.
+  const stride = Math.max(1, Math.floor((to - from) / 3000));
+  for (let i = from; i <= to; i += stride) {
+    const s = rows[Math.min(i, to)];
     if (i === from) ctx.moveTo(view.sx(s[X]), view.sy(s[Y]));
     else ctx.lineTo(view.sx(s[X]), view.sy(s[Y]));
   }
+  const last = rows[to];
+  ctx.lineTo(view.sx(last[X]), view.sy(last[Y]));
   ctx.stroke();
   ctx.globalAlpha = 1;
 }
@@ -951,6 +1052,7 @@ function drawWorld() {
     drawTrail(ctx, 0, state.cursor, 1);
     const s = state.samples[state.cursor];
     drawRobot(ctx, s[X], s[Y], s[QX], s[QY], false, colors['series-1'], state.robotName || null);
+    drawCamera(ctx, s);
   }
   if (state.hover >= 0 && state.hover < sel.length) {
     const s = sel[state.hover];
@@ -1070,32 +1172,47 @@ function drawPlot(plot) {
   const refs = plot.refs();
   const series = plot.series ? plot.series() : [{ col: plot.col, color: robot }];
   const has = (row, col) => Number.isFinite(row[col]);
+  // A log plot draws log10 of each value, floored at LOG_FLOOR, on a decade grid.
+  const val = plot.log ? (v) => Math.log10(Math.max(v, LOG_FLOOR)) : (v) => v;
 
-  let lo = 0, hi = 0;
+  let lo = plot.log ? Infinity : 0, hi = plot.log ? -Infinity : 0;
+  const rangeStride = Math.max(1, Math.floor(s.length / 4000));
   for (const { col } of series) {
-    for (const row of s) {
-      if (has(row, col)) { lo = Math.min(lo, row[col]); hi = Math.max(hi, row[col]); }
+    for (let i = 0; i < s.length; i += rangeStride) {
+      const row = s[i];
+      if (has(row, col)) { lo = Math.min(lo, val(row[col])); hi = Math.max(hi, val(row[col])); }
     }
   }
-  for (const r of refs) { hi = Math.max(hi, r.value * 1.15); lo = Math.min(lo, r.value * 1.15); }
-  if (hi - lo < 1e-9) { hi = lo + 1; }
-  const pad = (hi - lo) * 0.08;
-  hi += pad;
-  if (lo < 0) lo -= pad;
+  for (const r of refs) {
+    const rv = plot.log ? val(r.value) : r.value * 1.15;
+    hi = Math.max(hi, rv); lo = Math.min(lo, rv);
+  }
+  if (plot.log) {
+    if (!Number.isFinite(lo)) { lo = -1; hi = 0; }
+    lo = Math.floor(lo);
+    hi = Math.max(Math.ceil(hi), lo + 1);
+  } else {
+    if (hi - lo < 1e-9) { hi = lo + 1; }
+    const pad = (hi - lo) * 0.08;
+    hi += pad;
+    if (lo < 0) lo -= pad;
+  }
   const [t0, t1] = timeRange();
   const px = (t) => m.left + ((t - t0) / (t1 - t0)) * pw;
   const py = (v) => m.top + (1 - (v - lo) / (hi - lo)) * ph;
 
   ctx.font = '11px system-ui, sans-serif';
   ctx.lineWidth = 1;
-  const yStep = niceStep((hi - lo) / 3);
+  const yStep = plot.log ? Math.max(1, Math.ceil((hi - lo) / 5)) : niceStep((hi - lo) / 3);
   for (let v = Math.ceil(lo / yStep) * yStep; v <= hi; v += yStep) {
     const y = Math.round(py(v)) + 0.5;
-    ctx.strokeStyle = Math.abs(v) < yStep / 1e6 ? colors.border : colors.grid;
+    const zero = !plot.log && Math.abs(v) < yStep / 1e6;
+    ctx.strokeStyle = zero ? colors.border : colors.grid;
     ctx.beginPath(); ctx.moveTo(m.left, y); ctx.lineTo(w - m.right, y); ctx.stroke();
     ctx.fillStyle = colors['text-muted'];
     ctx.textAlign = 'right';
-    ctx.fillText(formatTick(Math.abs(v) < yStep / 1e6 ? 0 : v, yStep), m.left - 6, y + 4);
+    const label = plot.log ? (10 ** v).toExponential(0) : formatTick(zero ? 0 : v, yStep);
+    ctx.fillText(label, m.left - 6, y + 4);
   }
   const tStep = niceStep((t1 - t0) / 6);
   ctx.textAlign = 'center';
@@ -1105,7 +1222,7 @@ function drawPlot(plot) {
   }
 
   for (const r of refs) {
-    const y = Math.round(py(r.value)) + 0.5;
+    const y = Math.round(py(val(r.value))) + 0.5;
     ctx.strokeStyle = r.color || colors['series-2'];
     ctx.setLineDash([5, 4]);
     ctx.beginPath(); ctx.moveTo(m.left, y); ctx.lineTo(w - m.right, y); ctx.stroke();
@@ -1115,6 +1232,8 @@ function drawPlot(plot) {
     ctx.fillText(r.label, w - m.right - 2, y - 3);
   }
 
+  // No more than two rows per pixel column: enough for the eye, cheap for the browser.
+  const stride = Math.max(1, Math.floor(s.length / (2 * pw)));
   for (const { col, color, dash } of series) {
     ctx.strokeStyle = color;
     ctx.setLineDash(dash || []);
@@ -1122,10 +1241,11 @@ function drawPlot(plot) {
     ctx.lineJoin = 'round';
     ctx.beginPath();
     let drawing = false;
-    for (const row of s) {
+    for (let i = 0; i < s.length; i += stride) {
+      const row = s[i];
       if (!has(row, col)) { drawing = false; continue; }
-      if (!drawing) ctx.moveTo(px(row[T]), py(row[col]));
-      else ctx.lineTo(px(row[T]), py(row[col]));
+      if (!drawing) ctx.moveTo(px(row[T]), py(val(row[col])));
+      else ctx.lineTo(px(row[T]), py(val(row[col])));
       drawing = true;
     }
     ctx.stroke();
@@ -1144,7 +1264,7 @@ function drawPlot(plot) {
       ctx.fillStyle = color;
       ctx.strokeStyle = colors.surface;
       ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(x, py(row[col]), 4, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
+      ctx.beginPath(); ctx.arc(x, py(val(row[col])), 4, 0, 2 * Math.PI); ctx.fill(); ctx.stroke();
     }
   };
   if (state.mode === 'batch') mark(selCursor(), colors.border);
@@ -1191,10 +1311,14 @@ function setHover(index, ev) {
     ];
     const a = state.adaptive;
     if (a) {
-      a.fields.forEach((name, i) => {
-        const v = s[FIELDS.length + i];
-        if (Number.isFinite(v)) rows.push([name, fixed(v, 3)]);
-      });
+      for (const p of a.plots || []) {
+        for (const name of [...p.fields, ...(p.tooltip || [])]) {
+          const v = s[FIELDS.length + a.fields.indexOf(name)];
+          if (!Number.isFinite(v)) continue;
+          const text = name.startsWith('n_') ? String(v) : p.log ? v.toExponential(2) : fixed(v, 3);
+          rows.push([estimateLabel(name), text]);
+        }
+      }
     }
     tip.replaceChildren(...rows.map(([name, value]) => {
       const row = document.createElement('div');
@@ -1216,6 +1340,23 @@ function updateReadout() {
   const index = state.hover >= 0 ? state.hover : selCursor();
   const s = selRows()[index];
   const set = (id, text) => { $(id).textContent = text; };
+  // The camera rows stay in place whenever the fiducial estimator is selected, so the
+  // map card does not grow when the first sample arrives.
+  const fiducial = !!(state.adaptive && state.adaptive.fields.includes('tX_1_hat'));
+  $('camera-readout').hidden = !fiducial;
+  const cam = s ? cameraPoses(s) : null;
+  if (fiducial) {
+    const vec = (v) => v ? v.map((c) => fixed(c, 3)).join(', ') : '-';
+    const norm = (p, q, key) => (p && q)
+      ? Math.hypot(...p[key].map((c, i) => c - q[key][i])).toExponential(2) : '-';
+    const hat = cam && cam.hat, truth = cam && cam.truth;
+    set('r-tx-hat', vec(hat && hat.t));
+    set('r-tx-true', vec(truth && truth.t));
+    set('r-x-hat', vec(hat && hat.g));
+    set('r-x-true', vec(truth && truth.g));
+    set('r-e-tx', norm(hat, truth, 't'));
+    set('r-e-x', norm(hat, truth, 'g'));
+  }
   if (!s) {
     for (const id of ['r-t', 'r-x', 'r-y', 'r-th', 'r-d', 'r-v', 'r-w']) set(id, '-');
     return;

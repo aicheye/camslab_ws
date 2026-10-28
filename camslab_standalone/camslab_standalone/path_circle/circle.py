@@ -122,7 +122,7 @@ def run(
 def main():
     import argparse
 
-    ap = argparse.ArgumentParser(prog="camslab_offline.path_circle", description=__doc__,
+    ap = argparse.ArgumentParser(prog="camslab_standalone.path_circle", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--t-max", type=float, default=120.0)
     ap.add_argument("--lam", type=float, default=1.0, help="filter pole")

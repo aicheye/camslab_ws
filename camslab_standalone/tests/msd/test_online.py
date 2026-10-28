@@ -3,8 +3,8 @@
 import numpy as np
 import pytest
 
-from camslab_offline.msd.online import run
-from camslab_offline.msd.plant import MsdParams
+from camslab_standalone.msd.online import run
+from camslab_standalone.msd.plant import MsdParams
 
 
 def test_online_converges():

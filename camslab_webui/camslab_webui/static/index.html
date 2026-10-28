@@ -15,12 +15,16 @@
       <span id="status-text">idle</span>
     </span>
     <span id="status-message" class="muted"></span>
-    <span class="spacer"></span>
+    <div class="buttons">
+      <button id="start" type="button" class="primary">Start</button>
+      <button id="stop" type="button" class="danger">Stop</button>
+      <button id="reset" type="button">Reset</button>
+      <button id="csv" type="button">Download CSV</button>
+    </div>
     <span id="conn" class="muted">connecting</span>
   </header>
 
   <main>
-    <div class="main-col">
     <section class="card world-card">
       <div class="card-head">
         <h2>Global frame</h2>
@@ -51,19 +55,24 @@
         <div><dt>v</dt><dd id="r-v">-</dd></div>
         <div><dt>ω</dt><dd id="r-w">-</dd></div>
       </dl>
+      <dl class="readout" id="camera-readout" hidden>
+        <div><dt>camera t_X estimate [m]</dt><dd id="r-tx-hat">-</dd></div>
+        <div><dt>camera t_X true [m]</dt><dd id="r-tx-true">-</dd></div>
+        <div><dt>camera x estimate</dt><dd id="r-x-hat">-</dd></div>
+        <div><dt>camera x true</dt><dd id="r-x-true">-</dd></div>
+        <div><dt>‖t̃X‖</dt><dd id="r-e-tx">-</dd></div>
+        <div><dt>‖x̃‖</dt><dd id="r-e-x">-</dd></div>
+      </dl>
     </section>
     <section class="card plots">
       <label id="robot-pick" class="robot-pick" hidden>Plots for
         <select id="robot-select"></select>
       </label>
       <div class="plot-grid">
+        <div id="adaptive-plots"></div>
         <figure>
           <figcaption>Tracking error ‖p* − p‖ [m]</figcaption>
           <canvas id="plot-dist" class="plot"></canvas>
-        </figure>
-        <figure id="estimates-figure" hidden>
-          <figcaption>Estimates, dashed: true values <span id="estimate-legend" class="legend"></span></figcaption>
-          <canvas id="plot-estimates" class="plot"></canvas>
         </figure>
         <figure>
           <figcaption>Linear velocity command v [m/s]</figcaption>
@@ -76,17 +85,9 @@
       </div>
       <div class="muted axis-note">time [s]</div>
     </section>
-    </div>
 
     <section class="side">
       <div class="card">
-        <div class="buttons">
-          <button id="start" type="button" class="primary">Start</button>
-          <button id="stop" type="button" class="danger">Stop</button>
-          <button id="reset" type="button">Reset</button>
-          <span class="spacer"></span>
-          <button id="csv" type="button">Download CSV</button>
-        </div>
         <div class="fields">
           <fieldset>
             <legend>Trajectory</legend>
@@ -96,10 +97,12 @@
                 <option value="gerono">gerono</option>
                 <option value="ellipse">ellipse</option>
                 <option value="rectangle">rectangle</option>
+                <option value="bowtie">bowtie (double triangle)</option>
                 <option value="spline">spline</option>
               </select>
             </label>
             <button id="traj-random" type="button">Random</button>
+            <label><input id="traj-random-on-start" type="checkbox"> new path, camera and markers at Start</label>
           </fieldset>
           <fieldset id="adaptive-set">
             <legend>Adaptive estimator</legend>
@@ -119,7 +122,7 @@
             <label>y <input id="init-y" type="number" step="0.1"></label>
             <label>θ [deg] <input id="init-th" type="number" step="5"></label>
             <button id="init-random" type="button">Random</button>
-            <label><input id="init-random-on-start" type="checkbox"> random on Start</label>
+            <label><input id="init-on-path" type="checkbox"> on the path at Start</label>
           </fieldset>
           <fieldset id="polytope-set" hidden>
             <legend>Safety polytope</legend>

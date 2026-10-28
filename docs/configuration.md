@@ -25,12 +25,12 @@ rebuild.
 
 | Parameter | Meaning | Default |
 |---|---|---:|
-| `shape` | `circle`, `gerono`, `ellipse`, `rectangle`, or `spline` | `circle` |
+| `shape` | `circle`, `gerono`, `ellipse`, `rectangle`, `bowtie`, or `spline` | `circle` |
 | `x0`, `y0` | circle start point or shape centre [m] | `2.0`, `1.0` |
 | `theta0` | circle heading or shape axis [rad] | `0.0` |
 | `circle_speed` | circle speed [m/s] | `0.3` |
 | `kappa` | circle curvature [1/m]; zero gives a straight line | `1.0` |
-| `a`, `b` | shape half-axes or rectangle half-sides [m] | `2.0`, `1.0` |
+| `a`, `b` | shape half-axes or rectangle and bow-tie half-sides [m] | `2.0`, `1.0` |
 | `period` | lap duration for non-circles [s] | `40.0` |
 | `phi0` | Gerono or ellipse starting phase [rad] | `0.0` |
 | `control_points` | flat `[x0, y0, ...]` spline list; at least 4 points | see YAML |

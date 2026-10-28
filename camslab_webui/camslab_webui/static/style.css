@@ -45,6 +45,8 @@ body {
 .muted { color: var(--text-muted); }
 .spacer { flex: 1; }
 
+/* One row that never reflows: the status message takes the slack and is clipped, the
+   buttons and the connection word keep fixed places. */
 header {
   display: flex;
   align-items: center;
@@ -52,9 +54,12 @@ header {
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--surface);
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
-h1 { font-size: 16px; margin: 0; }
+h1 { font-size: 16px; margin: 0; white-space: nowrap; }
+#backend, .status { white-space: nowrap; }
+#status-message { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#conn { flex: none; width: 140px; text-align: right; }
 h2 { font-size: 13px; margin: 0; font-weight: 600; }
 .badge {
   padding: 2px 8px;
@@ -68,14 +73,16 @@ h2 { font-size: 13px; margin: 0; font-weight: 600; }
 .status[data-state="reached"] #status-icon { color: var(--good); }
 .status[data-state="error"] #status-icon { color: var(--critical); }
 
+/* Map on the left, plots on the right, the controls in a strip below both. */
 main {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 16px;
   padding: 16px;
-  max-width: 1500px;
+  max-width: 1700px;
   margin: 0 auto;
 }
+.side { grid-column: 1 / -1; }
 @media (max-width: 900px) {
   main { grid-template-columns: minmax(0, 1fr); }
 }
@@ -85,7 +92,7 @@ main {
   border-radius: 8px;
   padding: 12px;
 }
-.side, .main-col { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .card-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 
 .world-wrap { width: 100%; aspect-ratio: 1 / 1; max-height: 70vh; }
@@ -105,7 +112,8 @@ main {
 .readout dt { font-size: 11px; color: var(--text-muted); }
 .readout dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
 
-.buttons { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+.buttons { display: flex; gap: 8px; }
+header .buttons { flex: none; }
 button, select, input {
   font: inherit;
   color: inherit;
@@ -120,7 +128,9 @@ button.primary { background: var(--series-1); border-color: var(--series-1); col
 button.danger { background: var(--critical); border-color: var(--critical); color: #fff; font-weight: 700; }
 button:disabled, input:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.fields { display: flex; flex-direction: column; gap: 8px; }
+.fields { display: flex; flex-wrap: wrap; align-items: stretch; gap: 12px 16px; }
+.fields fieldset { flex: 1 1 300px; margin: 0; }
+.fields fieldset:last-child { flex-basis: 100%; }
 fieldset {
   border: 1px solid var(--border);
   border-radius: 6px;
@@ -132,8 +142,11 @@ fieldset {
 }
 legend { font-size: 12px; color: var(--text-secondary); padding: 0 4px; }
 label { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 13px; }
-input[type="number"] { width: 84px; padding: 3px 6px; font-variant-numeric: tabular-nums; }
-.params { display: flex; flex-wrap: wrap; gap: 10px; }
+input[type="number"] { width: 90px; flex: none; padding: 3px 6px; font-variant-numeric: tabular-nums; }
+/* A fixed grid of label-input pairs, inputs aligned in columns, so nothing moves when a
+   value changes width. */
+.params { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px 16px; width: 100%; }
+.params label { justify-content: space-between; }
 .poly-info { flex-basis: 100%; }
 
 .plot-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; }
@@ -145,6 +158,12 @@ input[type="number"] { width: 84px; padding: 3px 6px; font-variant-numeric: tabu
 .legend .key { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; }
 .legend .swatch { width: 12px; height: 3px; border-radius: 2px; display: inline-block; }
 .plot { width: 100%; height: 130px; display: block; }
+/* The estimator's plots, built from the backend's plot list, span both columns. */
+#adaptive-plots { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 10px; }
+#adaptive-plots:empty { display: none; }
+#adaptive-plots .plot { height: 180px; }
+#adaptive-plots figure:first-child .plot { height: 280px; }
+#camera-readout { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 .axis-note { text-align: center; font-size: 11px; }
 
 .tooltip {

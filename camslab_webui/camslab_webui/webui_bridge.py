@@ -1,5 +1,6 @@
 """Web UI backend for the Gazebo robots."""
 
+import json
 import logging
 import math
 import threading
@@ -17,8 +18,8 @@ from std_srvs.srv import SetBool, Trigger
 
 from .polytope import convex_hull, write_file
 from .random_trajectory import random_params
-from .server import (Backend, UiServer, adaptive_config, fleet_msg, hello_msg, samples_msg,
-                     status_msg)
+from .server import (Backend, UiServer, adaptive_config, fleet_msg, hello_msg, history_msgs,
+                     samples_msg, status_msg)
 
 PARAM_NAMES = ["shape", "x0", "y0", "theta0", "circle_speed", "kappa", "a", "b", "period",
                "phi0", "control_points", "k_par", "k_perp", "k_q", "kappa_max", "w_max",
@@ -78,7 +79,7 @@ class WebuiBridgeNode(Node, Backend):
         self.adaptive = self.declare_parameter("adaptive", "").value or ""
         self.estimator = bool(self.adaptive)
         self.estimate_names = []
-        self.plot_names = None
+        self.plots = []
         self.estimate = None
         self.sample_period = 1.0 / sample_rate
 
@@ -141,19 +142,20 @@ class WebuiBridgeNode(Node, Backend):
 
     @staticmethod
     def names_of(msg):
-        """(column names, plotted names or None) from the layout labels."""
+        """(column names, plots) from the layout labels, see
+        camslab.estimator_node.array_msg()."""
         dims = msg.layout.dim
         names = dims[0].label.split(",") if dims else []
-        plot = dims[1].label.split(",") if len(dims) > 1 else None
-        return names, plot
+        plots = json.loads(dims[1].label) if len(dims) > 1 and dims[1].label else []
+        return names, plots
 
     def on_estimate(self, msg):
-        names, plot = self.names_of(msg)
+        names, plots = self.names_of(msg)
         with self.lock:
             self.estimate = [x if math.isfinite(x) else None for x in msg.data]
-            changed = names != self.estimate_names or plot != self.plot_names
+            changed = names != self.estimate_names or plots != self.plots
             self.estimate_names = names
-            self.plot_names = plot
+            self.plots = plots
         if changed:
             self.server.broadcast_threadsafe(self.config_msg())
 
@@ -227,7 +229,7 @@ class WebuiBridgeNode(Node, Backend):
             adaptive = None
             if self.estimator:
                 adaptive = adaptive_config(self.adaptive, self.estimate_names,
-                                           editable=False, plot=self.plot_names)
+                                           editable=False, plots=self.plots)
             return {"type": "config", "params": dict(self.params), "path": list(self.path),
                     "initial": None,
                     "polytope": {**self.polytope, "file": self.polytope_file},
@@ -240,7 +242,7 @@ class WebuiBridgeNode(Node, Backend):
             status = self.status
         return [hello_msg(self.label, "live", False, self.robot_name, can_set_polytope=True),
                 self.config_msg(),
-                samples_msg(samples, reset=True), fleet_msg(fleet, reset=True), status]
+                *history_msgs(samples), fleet_msg(fleet, reset=True), status]
 
     async def on_message(self, msg):
         kind = msg.get("type")

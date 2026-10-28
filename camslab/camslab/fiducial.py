@@ -27,6 +27,9 @@ I3 = np.eye(3)
 # marker ones the maximum over the markers, as in Fig. 1 of the paper.
 CAMERA_FIELDS = ("x_1", "x_2", "x_3", "tX_1", "tX_2", "tX_3")
 ERROR_FIELDS = ("e_x", "e_tX", "e_m", "e_t")
+# lambda_min(G_x), lambda_min(G_t) and the sizes of the three history buffers H_x, H_t, H_h
+# of Section VII: how the information accumulates and when the camera laws switch on.
+EXCITATION_FIELDS = ("lam_x", "lam_t", "n_x", "n_t", "n_h")
 
 
 def fields(n_markers: int) -> tuple[str, ...]:
@@ -40,12 +43,26 @@ def fields(n_markers: int) -> tuple[str, ...]:
 
 
 def columns(n_markers: int) -> tuple[str, ...]:
-    """Sample-row columns: every estimate, every true value, then the four errors."""
+    """Sample-row columns: every estimate, every true value, the four errors, then the
+    excitation of EXCITATION_FIELDS."""
     f = fields(n_markers)
-    return tuple(n + "_hat" for n in f) + tuple(n + "_true" for n in f) + ERROR_FIELDS
+    return (tuple(n + "_hat" for n in f) + tuple(n + "_true" for n in f) + ERROR_FIELDS
+            + EXCITATION_FIELDS)
 
 
-PLOT_FIELDS = tuple(n + "_hat" for n in CAMERA_FIELDS) + tuple(n + "_true" for n in CAMERA_FIELDS)
+def plots(estimator) -> list:
+    """The web UI's plots of the sample columns: the four errors of Fig. 1 on a log axis,
+    and lambda_min of G_x and G_t against the gates alpha_x and alpha_t of eq. (13) and
+    (21). Each plot is {"caption", "fields", "log", "refs": [{"value", "label", "field"}],
+    "tooltip": [fields shown on hover only]}."""
+    return [
+        {"caption": "Estimation errors, log scale, as Fig. 1 of the paper",
+         "fields": list(ERROR_FIELDS), "log": True},
+        {"caption": "Excitation \u03bbmin(G), dashed: the gates \u03b1 that switch the camera laws on",
+         "fields": ["lam_x", "lam_t"], "log": True, "tooltip": ["n_x", "n_t", "n_h"],
+         "refs": [{"value": float(estimator.alpha_x), "label": "\u03b1_x", "field": "lam_x"},
+                  {"value": float(estimator.alpha_t), "label": "\u03b1_t", "field": "lam_t"}]},
+    ]
 
 
 # --- Cayley rotation coordinates (Section II.B) -----------------------------------------
@@ -58,7 +75,7 @@ def skew(v: np.ndarray) -> np.ndarray:
 
 def cayley_rotation(g: np.ndarray) -> np.ndarray:
     """R(g), the rotation matrix of the Cayley vector g, eq. (2). Step 1."""
-    raise NotImplementedError("step 1")
+    return (I3 + skew(g)) @ np.linalg.inv(I3 - skew(g))
 
 
 def rotation_cayley(R: np.ndarray) -> np.ndarray:
@@ -70,13 +87,15 @@ def rotation_cayley(R: np.ndarray) -> np.ndarray:
 
 def compose(g1: np.ndarray, g2: np.ndarray) -> np.ndarray:
     """g1 (+) g2, the Cayley vector of R(g1) R(g2), eq. (3). Step 1."""
-    raise NotImplementedError("step 1")
+    return (g1 + g2 + np.cross(g1, g2)) / (1 - g1 @ g2)
 
 
 def rotate(g: np.ndarray, v: np.ndarray) -> np.ndarray:
     """R(g, v) = R(g) v without building the matrix, eq. (4). v is one vector or an
     (n, 3) array of vectors, one per row. Step 1."""
-    raise NotImplementedError("step 1")
+    return ((1 - g @ g) * v + 2 * np.multiply.outer(v @ g, g) + 2 * np.cross(g, v)) / (
+        1 + g @ g
+    )
 
 
 def rotation_angle(R: np.ndarray) -> float:
@@ -101,8 +120,14 @@ def inverse(T: np.ndarray) -> np.ndarray:
 
 def rpy_rotation(roll: float, pitch: float, yaw: float) -> np.ndarray:
     """R = R_z(yaw) R_y(pitch) R_x(roll), the URDF and SDF convention."""
-    cr, sr, cp, sp, cy, sy = (math.cos(roll), math.sin(roll), math.cos(pitch),
-                              math.sin(pitch), math.cos(yaw), math.sin(yaw))
+    cr, sr, cp, sp, cy, sy = (
+        math.cos(roll),
+        math.sin(roll),
+        math.cos(pitch),
+        math.sin(pitch),
+        math.cos(yaw),
+        math.sin(yaw),
+    )
     Rz = np.array([[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]])
     Ry = np.array([[cp, 0.0, sp], [0.0, 1.0, 0.0], [-sp, 0.0, cp]])
     Rx = np.array([[1.0, 0.0, 0.0], [0.0, cr, -sr], [0.0, sr, cr]])
@@ -111,8 +136,9 @@ def rpy_rotation(roll: float, pitch: float, yaw: float) -> np.ndarray:
 
 def robot_pose(state: State, z: float = 0.0) -> np.ndarray:
     """W_T_R of a planar robot state: heading q about the world z axis at height z."""
-    R = np.array([[state.q[0], -state.q[1], 0.0], [state.q[1], state.q[0], 0.0],
-                  [0.0, 0.0, 1.0]])
+    R = np.array(
+        [[state.q[0], -state.q[1], 0.0], [state.q[1], state.q[0], 0.0], [0.0, 0.0, 1.0]]
+    )
     return pose(R, [state.p[0], state.p[1], z])
 
 
@@ -136,16 +162,44 @@ def paper_markers() -> list:
     """The three fiducials of the paper's simulation study, with orientations chosen here
     (the paper gives none) well inside the Cayley chart. Heights of the first two are
     supplied to the estimator."""
-    return [Marker((2.0, 1.0, 0.0), (0.0, 0.0, 0.8), True),
-            Marker((-1.5, 2.2, 0.0), (0.3, 0.0, -1.2), True),
-            Marker((1.0, -2.0, 0.4), (0.0, 0.4, 2.0), False)]
+    return [
+        Marker((2.0, 1.0, 0.0), (0.0, 0.0, 0.8), True),
+        Marker((-1.5, 2.2, 0.0), (0.3, 0.0, -1.2), True),
+        Marker((1.0, -2.0, 0.4), (0.0, 0.4, 2.0), False),
+    ]
 
 
 def lab_markers() -> list:
     """Three fiducials inside the 6 m x 6 m lab area, around the default paths."""
-    return [Marker((4.5, 1.0, 0.0), (0.0, 0.0, 2.5), True),
-            Marker((0.5, 3.0, 0.0), (0.3, 0.0, -0.5), True),
-            Marker((3.0, 4.0, 0.4), (0.0, 0.4, -1.8), False)]
+    return [
+        Marker((4.5, 1.0, 0.0), (0.0, 0.0, 2.5), True),
+        Marker((0.5, 3.0, 0.0), (0.3, 0.0, -0.5), True),
+        Marker((3.0, 4.0, 0.4), (0.0, 0.4, -1.8), False),
+    ]
+
+
+def random_scene(rng=None, area=(0.0, 0.0, 6.0, 6.0), n_markers: int = 3) -> "Scene":
+    """A random camera extrinsic and n_markers random fiducials inside `area` [m]. The
+    camera is rotated by 0.2 to 0.6 rad about a random axis and sits 0.1 to 0.3 m ahead
+    of the rear axle, 0.2 to 0.4 m up; the markers stand up to 0.5 m high with roll and
+    pitch within 0.4 rad and any yaw within 2.5 rad, well inside the Cayley chart. The
+    heights of the first two markers are known to the estimator."""
+    rng = np.random.default_rng(rng)
+    axis = rng.normal(size=3)
+    axis /= np.linalg.norm(axis)
+    cayley = tuple(float(c) for c in math.tan(rng.uniform(0.2, 0.6) / 2.0) * axis)
+    position = (rng.uniform(0.1, 0.3), rng.uniform(-0.12, 0.12), rng.uniform(0.2, 0.4))
+    x_min, y_min, x_max, y_max = area
+    markers = [
+        Marker(
+            (rng.uniform(x_min + 0.5, x_max - 0.5), rng.uniform(y_min + 0.5, y_max - 0.5),
+             rng.uniform(0.0, 0.5)),
+            (rng.uniform(-0.4, 0.4), rng.uniform(-0.4, 0.4), rng.uniform(-2.5, 2.5)),
+            j < 2,
+        )
+        for j in range(n_markers)
+    ]
+    return Scene(cayley, tuple(float(c) for c in position), markers)
 
 
 @dataclass
@@ -167,8 +221,9 @@ class Scene:
 
     def camera(self) -> np.ndarray:
         """X = R_T_C."""
-        return pose(cayley_rotation(np.asarray(self.camera_cayley, float)),
-                    self.camera_position)
+        return pose(
+            cayley_rotation(np.asarray(self.camera_cayley, float)), self.camera_position
+        )
 
     def marker_poses(self) -> list:
         """Y_j = W_T_Mj for every marker."""
@@ -176,7 +231,11 @@ class Scene:
 
     def known_heights(self) -> dict:
         """{j: h_j} for the markers whose world-frame height is known, j from 0."""
-        return {j: float(m.position[2]) for j, m in enumerate(self.markers) if m.known_height}
+        return {
+            j: float(m.position[2])
+            for j, m in enumerate(self.markers)
+            if m.known_height
+        }
 
     def observe(self, T_R: np.ndarray) -> dict:
         """The sensor: {j: C_T_Mj} for every marker visible from robot pose W_T_R = T_R,
@@ -198,19 +257,29 @@ class Scene:
     def truth(self) -> np.ndarray:
         """[x, t_X, m_1 .. m_N, t_1 .. t_N], the true value of Estimator.estimate()."""
         Ys = self.marker_poses()
-        return np.concatenate([np.asarray(self.camera_cayley, float),
-                               np.asarray(self.camera_position, float),
-                               *[rotation_cayley(Y[:3, :3]) for Y in Ys],
-                               *[Y[:3, 3] for Y in Ys]])
+        return np.concatenate(
+            [
+                np.asarray(self.camera_cayley, float),
+                np.asarray(self.camera_position, float),
+                *[rotation_cayley(Y[:3, :3]) for Y in Ys],
+                *[Y[:3, 3] for Y in Ys],
+            ]
+        )
 
 
 def errors(estimate: np.ndarray, truth: np.ndarray, n_markers: int) -> np.ndarray:
     """ERROR_FIELDS: ||x~||, ||t~_X||, max_j ||m~_j||, max_j ||t~_j||."""
     e = estimate - truth
-    m = e[6:6 + 3 * n_markers].reshape(n_markers, 3)
-    t = e[6 + 3 * n_markers:].reshape(n_markers, 3)
-    return np.array([np.linalg.norm(e[0:3]), np.linalg.norm(e[3:6]),
-                     np.max(np.linalg.norm(m, axis=1)), np.max(np.linalg.norm(t, axis=1))])
+    m = e[6 : 6 + 3 * n_markers].reshape(n_markers, 3)
+    t = e[6 + 3 * n_markers :].reshape(n_markers, 3)
+    return np.array(
+        [
+            np.linalg.norm(e[0:3]),
+            np.linalg.norm(e[3:6]),
+            np.max(np.linalg.norm(m, axis=1)),
+            np.max(np.linalg.norm(t, axis=1)),
+        ]
+    )
 
 
 # --- Regressions (Sections III and IV) --------------------------------------------------
@@ -219,90 +288,142 @@ def errors(estimate: np.ndarray, truth: np.ndarray, n_markers: int) -> np.ndarra
 def rotation_regression(p: np.ndarray, q: np.ndarray) -> tuple:
     """(Phi^R, y^R) of eq. (7) from the Cayley vectors p of R_A and q of R_B of a pair
     with relative rotation, so that Phi^R x = y^R. Step 2."""
-    raise NotImplementedError("step 2")
+    return (skew(p + q), q - p)
 
 
 def translation_regression(u: np.ndarray, d: np.ndarray) -> tuple:
     """(Phi^T, y^T) of eq. (8) from a pair with unchanged robot orientation: d is the
     robot displacement in the robot frame and u the relative marker translation in the
     camera frame, so that Phi^T x = y^T. Step 2."""
-    raise NotImplementedError("step 2")
+    return (skew(u + d), u - d)
 
 
 def information(Phi: np.ndarray, y: np.ndarray) -> tuple:
     """(G, h) of eq. (11) from stacked regressors Phi (n, 3, 3) and outputs y (n, 3).
     Step 3."""
-    raise NotImplementedError("step 3")
+    G = np.einsum("nki,nkj->ij", Phi, Phi)
+    h = np.einsum("nki,nk->i", Phi, y)
+
+    return (G, h)
 
 
-def height_output(x: np.ndarray, h: np.ndarray, p_z: np.ndarray, z: np.ndarray) -> np.ndarray:
+def height_output(
+    x: np.ndarray, h: np.ndarray, p_z: np.ndarray, z: np.ndarray
+) -> np.ndarray:
     """y^h of eq. (18) for stacked height observations: the known marker heights h (n,),
     the robot heights p_z (n,) and the marker positions in the camera frame z (n, 3).
     Returns (n,). Step 4."""
-    raise NotImplementedError("step 4")
+    return h - p_z - rotate(x, z) @ E3
 
 
 def translation_information(Phi_t: np.ndarray, n_heights: int) -> np.ndarray:
     """G_t of eq. (19) from the stacked relative-pose regressors Phi_t (n, 3, 3) and the
     number of height observations. Step 4."""
-    raise NotImplementedError("step 4")
+    G = np.einsum("nki,nkj->ij", Phi_t, Phi_t)
+    G += n_heights * np.multiply.outer(E3, E3)
+
+    return G
 
 
-def translation_rhs(x: np.ndarray, Phi_t: np.ndarray, t_A: np.ndarray, t_B: np.ndarray,
-                    h: np.ndarray, p_z: np.ndarray, z: np.ndarray) -> np.ndarray:
+def translation_rhs(
+    x: np.ndarray,
+    Phi_t: np.ndarray,
+    t_A: np.ndarray,
+    t_B: np.ndarray,
+    h: np.ndarray,
+    p_z: np.ndarray,
+    z: np.ndarray,
+) -> np.ndarray:
     """h_t(x) of eq. (20), re-evaluated from the stored raw data at the orientation x:
     Phi_t (n, 3, 3), t_A (n, 3), t_B (n, 3), and the height data as in height_output().
     Step 4."""
-    raise NotImplementedError("step 4")
+    y_t = rotate(x, t_B) - t_A
+    h_t = np.einsum("nki,nk->i", Phi_t, y_t)
+    h_t += E3 * np.sum(height_output(x, h, p_z, z))
+
+    return h_t
 
 
-def marker_orientation_observation(R_R: np.ndarray, x: np.ndarray, R_b: np.ndarray) -> np.ndarray:
+def marker_orientation_observation(
+    R_R: np.ndarray, x: np.ndarray, R_b: np.ndarray
+) -> np.ndarray:
     """m_obs of eq. (23) with the robot rotation R(a) = R_R and the marker rotation in the
     camera frame R(b) = R_b given as matrices. Compose matrices and convert once, so the
     robot's heading may pass through pi. Step 5."""
-    raise NotImplementedError("step 5")
+    return rotation_cayley(R_R @ cayley_rotation(x) @ R_b)
 
 
-def marker_position_observation(p_R: np.ndarray, R_R: np.ndarray, x: np.ndarray,
-                                t_X: np.ndarray, z: np.ndarray) -> np.ndarray:
+def marker_position_observation(
+    p_R: np.ndarray, R_R: np.ndarray, x: np.ndarray, t_X: np.ndarray, z: np.ndarray
+) -> np.ndarray:
     """t_obs of eq. (25) from the robot position p_R and rotation R_R, the camera
     orientation x and position t_X, and the marker position z in the camera frame.
     Step 5."""
-    raise NotImplementedError("step 5")
+    return p_R + R_R @ (t_X + rotate(x, z))
 
 
 # --- The estimator (Sections III to V and VII) ------------------------------------------
 
 
 class History:
-    """A bounded history of regression entries with their 3x3 information matrices. When
-    full, the entry whose removal lowers lambda_min(G) the least is replaced, so the
-    history keeps its excitation (Section VII, step 2)."""
+    """A bounded history of regression entries with their information. Each entry carries
+    its own (G_i, h_i); push() adds them to the running sums and pop() subtracts them, so
+    G() and h() cost nothing per tick. When full, push() first pops the entry whose
+    removal lowers lambda_min(G) the least, so the history keeps its excitation
+    (Section VII, step 2). The sums are recomputed from the entries every maxlen pops
+    to clear the rounding drift of the subtractions."""
 
     def __init__(self, maxlen: int):
         self.maxlen = maxlen
         self.entries = []
         self.infos = []
+        self.G_sum = np.zeros((3, 3))
+        self.h_sum = np.zeros(3)
+        self.pops = 0
+        self._stacked = {}
 
     def __len__(self):
         return len(self.entries)
 
-    def push(self, entry, info: np.ndarray) -> None:
+    def push(self, entry, G_i: np.ndarray, h_i: np.ndarray | None = None) -> None:
+        h_i = np.zeros(3) if h_i is None else np.asarray(h_i, float)
         if len(self.entries) >= self.maxlen:
-            infos = np.array(self.infos)
-            G = infos.sum(axis=0)
-            lam = np.linalg.eigvalsh(G[None] - infos)[:, 0]
-            i = int(np.argmax(lam))
-            del self.entries[i], self.infos[i]
+            self.pop(self.least_informative())
         self.entries.append(entry)
-        self.infos.append(info)
+        self.infos.append((np.asarray(G_i, float), h_i))
+        self.G_sum = self.G_sum + G_i
+        self.h_sum = self.h_sum + h_i
+        self._stacked.clear()
+
+    def pop(self, i: int) -> None:
+        del self.entries[i]
+        G_i, h_i = self.infos.pop(i)
+        self.G_sum = self.G_sum - G_i
+        self.h_sum = self.h_sum - h_i
+        self.pops += 1
+        if self.pops % self.maxlen == 0:
+            self.G_sum = sum((G for G, _ in self.infos), np.zeros((3, 3)))
+            self.h_sum = sum((h for _, h in self.infos), np.zeros(3))
+        self._stacked.clear()
+
+    def least_informative(self) -> int:
+        """The index whose removal lowers lambda_min(G) the least."""
+        infos = np.array([G for G, _ in self.infos])
+        lam = np.linalg.eigvalsh(self.G_sum[None] - infos)[:, 0]
+        return int(np.argmax(lam))
 
     def G(self) -> np.ndarray:
-        return np.sum(self.infos, axis=0) if self.infos else np.zeros((3, 3))
+        return self.G_sum.copy()
+
+    def h(self) -> np.ndarray:
+        return self.h_sum.copy()
 
     def stacked(self, k: int) -> np.ndarray:
-        """Entry component k of every entry, stacked along a new first axis."""
-        return np.array([e[k] for e in self.entries])
+        """Entry component k of every entry, stacked along a new first axis. Cached
+        until the next push or pop."""
+        if k not in self._stacked:
+            self._stacked[k] = np.array([e[k] for e in self.entries])
+        return self._stacked[k]
 
 
 @dataclass
@@ -354,21 +475,42 @@ class Estimator:
     straight stretches identify everything.
     """
 
-    def __init__(self, n_markers: int, heights: dict, gamma_x: float = 2.0,
-                 gamma_t: float = 2.0, gamma_m: float = 1.0, gamma_j: float = 1.0,
-                 alpha_x: float = 0.05, alpha_t: float = 0.05, n_orientation: int = 120,
-                 n_translation: int = 120, n_height: int = 80,
-                 psi_min: float = math.radians(30.0), straight_tol: float = 5e-4,
-                 d_min: float = 0.2, d_step: float = 0.1, l_buffer: float = 4.0):
+    def __init__(
+        self,
+        n_markers: int,
+        heights: dict,
+        gamma_x: float = 2.0,
+        gamma_t: float = 2.0,
+        gamma_m: float = 1.0,
+        gamma_j: float = 1.0,
+        alpha_x: float = 0.05,
+        alpha_t: float = 0.05,
+        n_x: int = 120,
+        n_t: int = 120,
+        n_h: int = 80,
+        psi_min: float = math.radians(30.0),
+        straight_tol: float = 5e-4,
+        d_min: float = 0.2,
+        d_step: float = 0.1,
+        l_buffer: float = 4.0,
+    ):
         self.n = n_markers
         self.heights = dict(heights)
-        self.gamma_x, self.gamma_t, self.gamma_m, self.gamma_j = gamma_x, gamma_t, gamma_m, gamma_j
+        self.gamma_x, self.gamma_t, self.gamma_m, self.gamma_j = (
+            gamma_x,
+            gamma_t,
+            gamma_m,
+            gamma_j,
+        )
         self.alpha_x, self.alpha_t = alpha_x, alpha_t
         self.psi_min, self.straight_tol, self.d_min = psi_min, straight_tol, d_min
         self.d_step, self.l_buffer = d_step, l_buffer
-        self.orientation = History(n_orientation)
-        self.translation = History(n_translation)
-        self.height = History(n_height)
+        # The bounded history buffers of Section VII: orientation regressions for G_x and
+        # h_x, raw relative-pose tuples (Phi_t, t_A, t_B) for G_t, and known-height
+        # observations, capped at the paper's 120, 120 and 80 entries.
+        self.H_x = History(n_x)
+        self.H_t = History(n_t)
+        self.H_h = History(n_h)
         self.buffers = {}
         self.travel = 0.0
         self.last_p = None
@@ -392,8 +534,11 @@ class Estimator:
             for _, T_Ri, T_Mi in buffer:
                 A = inverse(T_Ri) @ T_R
                 angle, dist = rotation_angle(A[:3, :3]), float(np.linalg.norm(A[:3, 3]))
-                if angle <= self.straight_tol and dist >= self.d_min and (
-                        straight is None or dist > straight[0]):
+                if (
+                    angle <= self.straight_tol
+                    and dist >= self.d_min
+                    and (straight is None or dist > straight[0])
+                ):
                     straight = (dist, T_Ri, T_Mi, A)
                 if angle >= self.psi_min and (rotation is None or angle > rotation[0]):
                     rotation = (angle, T_Ri, T_Mi, A)
@@ -401,44 +546,60 @@ class Estimator:
                 _, _, T_Mi, A = straight
                 B = T_Mi @ inverse(T_M)
                 Phi, y = translation_regression(B[:3, 3], A[:3, 3])
-                self.orientation.push((Phi, y), Phi.T @ Phi)
+                self.H_x.push((Phi, y), *information(Phi[None], y[None]))
             if rotation is not None:
                 _, _, T_Mi, A = rotation
                 B = T_Mi @ inverse(T_M)
-                Phi, y = rotation_regression(rotation_cayley(A[:3, :3]),
-                                             rotation_cayley(B[:3, :3]))
-                self.orientation.push((Phi, y), Phi.T @ Phi)
+                Phi, y = rotation_regression(
+                    rotation_cayley(A[:3, :3]), rotation_cayley(B[:3, :3])
+                )
+                self.H_x.push((Phi, y), *information(Phi[None], y[None]))
                 Phi_t = A[:3, :3] - I3
-                self.translation.push((Phi_t, A[:3, 3], B[:3, 3]), Phi_t.T @ Phi_t)
+                self.H_t.push((Phi_t, A[:3, 3], B[:3, 3]),
+                                      translation_information(Phi_t[None], 0))
             buffer.append((self.travel, T_R, T_M))
             while buffer and buffer[0][0] < self.travel - self.l_buffer:
                 del buffer[0]
             if j in self.heights:
-                self.height.push((self.heights[j], T_R[2, 3], T_M[:3, 3]), np.outer(E3, E3))
+                self.H_h.push(
+                    (self.heights[j], T_R[2, 3], T_M[:3, 3]), translation_information(np.zeros((0, 3, 3)), 1)
+                )
 
     def make_tick(self, T_R: np.ndarray, observations: dict) -> Tick:
         """Everything dynamics() reads besides X."""
-        if len(self.orientation):
-            G_x, h_x = information(self.orientation.stacked(0), self.orientation.stacked(1))
-        else:
-            G_x, h_x = np.zeros((3, 3)), np.zeros(3)
-        if len(self.translation):
-            Phi_t, t_A, t_B = (self.translation.stacked(k) for k in range(3))
+        G_x, h_x = self.H_x.G(), self.H_x.h()
+        if len(self.H_t):
+            Phi_t, t_A, t_B = (self.H_t.stacked(k) for k in range(3))
         else:
             Phi_t, t_A, t_B = np.zeros((0, 3, 3)), np.zeros((0, 3)), np.zeros((0, 3))
-        if len(self.height):
-            h, p_z, z_h = (self.height.stacked(k) for k in range(3))
+        if len(self.H_h):
+            h, p_z, z_h = (self.H_h.stacked(k) for k in range(3))
         else:
             h, p_z, z_h = np.zeros(0), np.zeros(0), np.zeros((0, 3))
-        G_t = translation_information(Phi_t, len(self.height))
+        G_t = self.H_t.G() + self.H_h.G()
         chi = np.zeros(self.n)
         R_b = np.tile(I3, (self.n, 1, 1))
         z = np.zeros((self.n, 3))
         for j, T_M in observations.items():
             chi[j], R_b[j], z[j] = 1.0, T_M[:3, :3], T_M[:3, 3]
-        return Tick(G_x, h_x, bool(np.linalg.eigvalsh(G_x)[0] >= self.alpha_x),
-                    G_t, bool(np.linalg.eigvalsh(G_t)[0] >= self.alpha_t),
-                    Phi_t, t_A, t_B, h, p_z, z_h, T_R[:3, :3], T_R[:3, 3], chi, R_b, z)
+        return Tick(
+            G_x,
+            h_x,
+            bool(np.linalg.eigvalsh(G_x)[0] >= self.alpha_x),
+            G_t,
+            bool(np.linalg.eigvalsh(G_t)[0] >= self.alpha_t),
+            Phi_t,
+            t_A,
+            t_B,
+            h,
+            p_z,
+            z_h,
+            T_R[:3, :3],
+            T_R[:3, 3],
+            chi,
+            R_b,
+            z,
+        )
 
     # -- steps 3 to 5: the adaptive laws ------------------------------------------------
 
@@ -455,10 +616,37 @@ class Estimator:
         n = self.n
         x_hat = X[0:3]
         tX_hat = X[3:6]
-        m_hat = X[6:6 + 3 * n].reshape(n, 3)
-        t_hat = X[6 + 3 * n:].reshape(n, 3)
+        m_hat = X[6 : 6 + 3 * n].reshape(n, 3)
+        t_hat = X[6 + 3 * n :].reshape(n, 3)
 
-        raise NotImplementedError("step 6")
+        # eq. (14): preconditioned gradient on the orientation history
+        dx_hat = np.zeros(3)
+        if tick.ready_x:
+            dx_hat = self.gamma_x * np.linalg.solve(tick.G_x, tick.h_x - tick.G_x @ x_hat)
+
+        # eq. (20), (21): h_t re-evaluated at the current x_hat, then the same law.
+        # tick.z_h is the stored height data; tick.z is the current observations.
+        dtX_hat = np.zeros(3)
+        if tick.ready_t:
+            h_t = translation_rhs(
+                x_hat, tick.Phi_t, tick.t_A, tick.t_B, tick.h, tick.p_z, tick.z_h
+            )
+            dtX_hat = self.gamma_t * np.linalg.solve(tick.G_t, h_t - tick.G_t @ tX_hat)
+
+        # eq. (23) to (26): every visible marker tracks its observation
+        dm_hat = np.zeros((n, 3))
+        dt_hat = np.zeros((n, 3))
+        for j in range(n):
+            if tick.chi[j] == 0.0:
+                continue
+            m_obs = marker_orientation_observation(tick.R_R, x_hat, tick.R_b[j])
+            t_obs = marker_position_observation(
+                tick.p_R, tick.R_R, x_hat, tX_hat, tick.z[j]
+            )
+            dm_hat[j] = self.gamma_m * tick.chi[j] * (m_obs - m_hat[j])
+            dt_hat[j] = self.gamma_j * tick.chi[j] * (t_obs - t_hat[j])
+
+        return np.concatenate((dx_hat, dtX_hat, dm_hat.ravel(), dt_hat.ravel()))
 
     def update(self, T_R: np.ndarray, observations: dict, dt: float) -> None:
         """One camera sample: robot pose W_T_R and {j: C_T_Mj} of the visible markers,
@@ -467,13 +655,29 @@ class Estimator:
         self.tick = self.make_tick(T_R, observations)
         if dt <= 0:
             return
-        sol = solve_ivp(lambda t, X: self.dynamics(X, self.tick), (0.0, dt), self.X,
-                        rtol=1e-8, atol=1e-10)
+        sol = solve_ivp(
+            lambda t, X: self.dynamics(X, self.tick),
+            (0.0, dt),
+            self.X,
+            rtol=1e-8,
+            atol=1e-10,
+        )
         self.X = sol.y[:, -1]
 
     def estimate(self) -> np.ndarray:
         """[x_hat, tX_hat, m_hat_1 .. m_hat_N, t_hat_1 .. t_hat_N], ordered as fields(N)."""
         return self.X.copy()
+
+    def excitation(self) -> np.ndarray:
+        """EXCITATION_FIELDS at the last update: lambda_min(G_x), lambda_min(G_t) and the
+        number of stored rotation pairs, translation pairs and height observations."""
+        if self.tick is None:
+            lam_x = lam_t = 0.0
+        else:
+            lam_x = float(np.linalg.eigvalsh(self.tick.G_x)[0])
+            lam_t = float(np.linalg.eigvalsh(self.tick.G_t)[0])
+        return np.array([lam_x, lam_t, float(len(self.H_x)),
+                         float(len(self.H_t)), float(len(self.H_h))])
 
     def ready(self) -> tuple:
         """(G_x >= alpha_x I, G_t >= alpha_t I) at the last update."""

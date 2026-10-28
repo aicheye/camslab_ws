@@ -6,8 +6,8 @@ import math
 import numpy as np
 import pytest
 
-from camslab.trajectory import (Circle, Ellipse, Gerono, Spline, Rectangle, check_limits,
-                                    make_shape, reference)
+from camslab.trajectory import (Bowtie, Circle, Ellipse, Gerono, Spline, Rectangle,
+                                    check_limits, make_shape, reference)
 from camslab.types import Params
 
 H = 1e-5
@@ -23,6 +23,8 @@ SHAPES = {
         Params(x0=2.0, y0=1.0, theta0=0.3, a=1.5, b=1.0, period=30.0, phi0=0.8)),
     "rectangle": lambda: Rectangle(
         Params(x0=2.0, y0=1.0, theta0=0.3, a=1.5, b=1.0, period=30.0)),
+    "bowtie": lambda: Bowtie(
+        Params(x0=2.0, y0=1.0, theta0=0.3, a=2.0, b=1.5, period=30.0)),
     "spline": lambda: Spline(Params(control_points=SPLINE_POINTS, period=30.0)),
 }
 
@@ -127,6 +129,38 @@ def test_rectangle_starts_mid_side_and_turns_at_its_corners():
         ref = reference(shape, t)
         assert ref.v == pytest.approx(4 * (1.5 + 1.0) / 30.0)
         assert ref.kappa == pytest.approx(0.0)
+
+
+def test_bowtie_starts_at_its_crossing_and_rounds_its_corners():
+    params = Params(x0=2.0, y0=1.0, theta0=0.3, a=2.0, b=1.5, period=30.0, kappa_max=2.9)
+    shape = Bowtie(params)
+    c, s = math.cos(0.3), math.sin(0.3)
+    frame = lambda u, v: [2.0 + u * c - v * s, 1.0 + u * s + v * c]
+    r = 1.0 / 2.9
+    phi = math.pi / 2 + math.atan2(1.5, 2.0)
+    cut = r * math.tan(phi / 2)
+    perimeter = 2 * (5.0 - 2 * cut) + 2 * (3.0 - 2 * cut) + 4 * r * phi
+    speed = perimeter / 30.0
+    assert shape.position(0.0) == pytest.approx(frame(0.0, 0.0))
+    heading = 0.3 + math.atan2(1.5, 2.0)
+    assert reference(shape, 0.0).q == pytest.approx([math.cos(heading), math.sin(heading)])
+    assert reference(shape, 0.0).kappa == pytest.approx(0.0)
+    # The first arc, a right turn at (a, b), starts `cut` before the corner.
+    t_arc = (2.5 - cut) / speed
+    assert shape.position(t_arc) == pytest.approx(frame(2.0 - cut * math.cos(math.atan2(1.5, 2.0)),
+                                                        1.5 - cut * math.sin(math.atan2(1.5, 2.0))))
+    assert reference(shape, t_arc + 0.5 * r * phi / speed).kappa == pytest.approx(-2.9)
+    assert reference(shape, t_arc + r * phi / speed).q == pytest.approx(
+        [math.cos(0.3 - math.pi / 2), math.sin(0.3 - math.pi / 2)])
+    # Half a lap later the path is back at the crossing on the other diagonal.
+    assert shape.position(15.0) == pytest.approx(frame(0.0, 0.0))
+    for t in TIMES:
+        assert shape.position(t + params.period) == pytest.approx(shape.position(t))
+        assert reference(shape, t).v == pytest.approx(speed)
+    check_limits(shape, params, params.period)
+    assert Bowtie.fits(2.0, 1.5, 2.9) and not Bowtie.fits(0.5, 0.5, 2.9)
+    with pytest.raises(ValueError):
+        Bowtie(Params(a=0.5, b=0.5, kappa_max=2.9))
 
 
 def test_spline_is_periodic():

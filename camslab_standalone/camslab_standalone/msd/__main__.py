@@ -1,4 +1,4 @@
-"""Mass-spring-damper estimation: python -m camslab_offline.msd [--no-plot]."""
+"""Mass-spring-damper estimation: python -m camslab_standalone.msd [--no-plot]."""
 
 import argparse
 
@@ -9,7 +9,7 @@ from .plant import MsdParams
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="camslab_offline.msd", description=__doc__,
+    ap = argparse.ArgumentParser(prog="camslab_standalone.msd", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--t-max", type=float, default=60.0)
     ap.add_argument("--dt", type=float, default=1e-3, help="output sample spacing, s")

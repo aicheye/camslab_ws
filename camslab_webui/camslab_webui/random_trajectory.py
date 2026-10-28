@@ -3,6 +3,8 @@
 import math
 import random
 
+from camslab.trajectory import Bowtie
+
 AREA = (0.0, 0.0, 6.0, 6.0)
 MARGIN = 0.3
 MIN_RADIUS = 0.5
@@ -23,8 +25,15 @@ def _inner(area, margin):
 
 
 def random_params(shape, params, area=AREA, margin=MARGIN, rng=random):
+    """_random_params() rounded to 3 decimals, so the web UI shows short numbers."""
+    picked = _random_params(shape, params, area, margin, rng)
+    return {k: [round(x, 3) for x in v] if isinstance(v, list) else round(v, 3)
+            for k, v in picked.items()}
+
+
+def _random_params(shape, params, area, margin, rng):
     """Return a dict of trajectory parameters for `shape` ("circle", "gerono", "ellipse",
-    "rectangle" or "spline"). The spline's control_points is a list [x0, y0, x1, y1, ...].
+    "rectangle", "bowtie" or "spline"). The spline's control_points is a list [x0, y0, x1, y1, ...].
 
     params gives kappa_max, w_max and circle_speed. Raises ValueError when the limits
     leave no circle that fits in the area.
@@ -66,9 +75,12 @@ def random_params(shape, params, area=AREA, margin=MARGIN, rng=random):
                 "period": rng.uniform(*PERIOD_RANGE),
                 "phi0": rng.uniform(-math.pi, math.pi)}
 
-    if shape == "rectangle":
-        a = rng.uniform(MIN_HALF_SIDE, size / (2.0 * math.sqrt(2.0)))
-        b = rng.uniform(MIN_HALF_SIDE, size / (2.0 * math.sqrt(2.0)))
+    if shape in ("rectangle", "bowtie"):
+        while True:
+            a = rng.uniform(MIN_HALF_SIDE, size / (2.0 * math.sqrt(2.0)))
+            b = rng.uniform(MIN_HALF_SIDE, size / (2.0 * math.sqrt(2.0)))
+            if shape == "rectangle" or Bowtie.fits(a, b, params["kappa_max"]):
+                break
         reach = math.hypot(a, b)
         return {"x0": rng.uniform(x_min + reach, x_max - reach),
                 "y0": rng.uniform(y_min + reach, y_max - reach),

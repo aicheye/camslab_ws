@@ -5,6 +5,7 @@ camslab.fiducial ("fiducial": the camera extrinsic and the marker poses, with th
 sensor simulated from the parameters in config/fiducial.yaml).
 """
 
+import json
 import math
 
 import numpy as np
@@ -29,15 +30,15 @@ TRUE_COLOR = ColorRGBA(r=0.6, g=0.6, b=0.6, a=0.6)
 ESTIMATE_COLOR = ColorRGBA(r=0.12, g=0.62, b=0.54, a=1.0)
 
 
-def array_msg(names, values, plot=None):
-    """Float64MultiArray labelled with the column names; a second dim names the columns
-    the web UI plots."""
+def array_msg(names, values, plots=()):
+    """Float64MultiArray labelled with the column names; a second dim carries the web UI
+    plots of camslab_webui.server.adaptive_config() as JSON."""
     msg = Float64MultiArray()
     msg.layout.dim = [MultiArrayDimension(label=",".join(names), size=len(values),
                                           stride=len(values))]
-    if plot is not None:
-        msg.layout.dim.append(MultiArrayDimension(label=",".join(plot), size=len(plot),
-                                                  stride=len(plot)))
+    if plots:
+        msg.layout.dim.append(MultiArrayDimension(label=json.dumps(list(plots)), size=0,
+                                                  stride=0))
     msg.data = [float(v) for v in values]
     return msg
 
@@ -79,6 +80,25 @@ def quaternion_of(R: np.ndarray):
     q[j] = (R[j, i] + R[i, j]) / s
     q[k] = (R[k, i] + R[i, k]) / s
     return tuple(q)
+
+
+def text_marker(ns, mid, position, text, color, frame, stamp, height=0.12):
+    m = Marker()
+    m.header.frame_id = frame
+    m.header.stamp = stamp
+    m.ns, m.id, m.type, m.action = ns, mid, Marker.TEXT_VIEW_FACING, Marker.ADD
+    m.pose.position.x, m.pose.position.y, m.pose.position.z = (float(v) for v in position)
+    m.pose.orientation.w = 1.0
+    m.scale.z = height
+    m.color = color
+    m.text = text
+    return m
+
+
+def error_text(e) -> str:
+    """The four errors of fiducial.ERROR_FIELDS as two lines for RViz."""
+    return (f"|x~| {e[0]:.1e}   |t~X| {1e3 * e[1]:.1f} mm\n"
+            f"max |m~j| {e[2]:.1e}   max |t~j| {1e3 * e[3]:.1f} mm")
 
 
 def pose_marker(ns, mid, T, color, frame, stamp, kind=Marker.CUBE, scale=(0.2, 0.2, 0.02)):
@@ -220,21 +240,24 @@ class EstimatorNode(Node):
             p = np.array([self.pose.pose.position.x, self.pose.pose.position.y])
             self.estimator.update(p, self.true_path.xi(p), dt)
             self.estimate_pub.publish(array_msg(
-                adaptive.COLUMNS, [*self.estimator.estimate(), *self.true_path.truth(p)]))
+                adaptive.COLUMNS, [*self.estimator.estimate(), *self.true_path.truth(p)],
+                plots=adaptive.PLOTS))
             return
         T_R = pose_matrix(self.pose)
         self.estimator.update(T_R, self.scene.observe(T_R), dt)
         estimate = self.estimator.estimate()
+        e = fiducial.errors(estimate, self.truth, self.scene.n)
         self.estimate_pub.publish(array_msg(
             fiducial.columns(self.scene.n),
-            [*estimate, *self.truth, *fiducial.errors(estimate, self.truth, self.scene.n)],
-            plot=fiducial.PLOT_FIELDS))
+            [*estimate, *self.truth, *e, *self.estimator.excitation()],
+            plots=fiducial.plots(self.estimator)))
         if now - self.last_markers >= 1.0 / MARKER_RATE:
             self.last_markers = now
-            self.marker_pub.publish(self.marker_array(T_R, estimate))
+            self.marker_pub.publish(self.marker_array(T_R, estimate, e))
 
-    def marker_array(self, T_R, estimate):
-        """RViz markers: the true fiducials and camera in grey, the estimates in green."""
+    def marker_array(self, T_R, estimate, e):
+        """RViz markers: the true fiducials and camera in grey, the estimates in green, and
+        the four errors of fiducial.ERROR_FIELDS as text above the car."""
         n = self.scene.n
         stamp = self.get_clock().now().to_msg()
         msg = MarkerArray()
@@ -251,6 +274,8 @@ class EstimatorNode(Node):
         X_hat = fiducial.pose(fiducial.cayley_rotation(estimate[0:3]), estimate[3:6])
         msg.markers.append(pose_marker("estimate", n, T_R @ X_hat, ESTIMATE_COLOR,
                                        self.frame, stamp, **arrow))
+        msg.markers.append(text_marker("estimate", n + 1, T_R[:3, 3] + [0.0, 0.0, 0.6],
+                                       error_text(e), ESTIMATE_COLOR, self.frame, stamp))
         return msg
 
 

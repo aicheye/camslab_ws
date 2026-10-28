@@ -44,14 +44,17 @@ def hello_msg(backend, mode, can_set_pose, robot_name="", can_set_polytope=False
 ESTIMATORS = {"": "off", "path": "path circle", "fiducial": "fiducial surveying"}
 
 
-def adaptive_config(kind, fields=(), editable=True, plot=None):
+def adaptive_config(kind, fields=(), editable=True, plots=()):
     """The "adaptive" entry of a "config" message. kind is the estimator that runs, a key
     of ESTIMATORS, "" for none. fields name the columns appended to each sample row after
     SAMPLE_FIELDS: "<name>_hat" for an estimate and "<name>_true" for its true value;
-    other names are plain columns. plot lists the fields drawn in the estimates plot, all
-    of them when None. editable is false when the backend fixes the setting at launch."""
+    other names are plain columns. plots are the time plots of those columns, each
+    {"caption": str, "fields": [names], "log": bool, "refs": [{"value", "label",
+    "field"}], "tooltip": [names shown on hover only]}: a "_true" field is dashed in the
+    colour of its "_hat", and a ref is a dashed horizontal line in the colour of its
+    field. editable is false when the backend fixes the setting at launch."""
     return {"kind": kind or "", "kinds": dict(ESTIMATORS), "fields": list(fields),
-            "plot": None if plot is None else list(plot), "editable": editable}
+            "plots": list(plots), "editable": editable}
 
 
 def status_msg(state, message=""):
@@ -59,8 +62,21 @@ def status_msg(state, message=""):
     return {"type": "status", "state": state, "message": message}
 
 
+ON_CONNECT_CHUNK = 1000  # rows per message when a history is replayed to a new browser
+
+
 def samples_msg(samples, reset=False):
     return {"type": "samples", "reset": reset, "samples": samples}
+
+
+def history_msgs(samples):
+    """The messages that replay a whole history: a reset, then chunks of ON_CONNECT_CHUNK
+    rows, so neither the server's JSON encoding nor the browser's parsing stalls on one
+    multi-megabyte message."""
+    msgs = [samples_msg(samples[:ON_CONNECT_CHUNK], reset=True)]
+    for k in range(ON_CONNECT_CHUNK, len(samples), ON_CONNECT_CHUNK):
+        msgs.append(samples_msg(samples[k:k + ON_CONNECT_CHUNK]))
+    return msgs
 
 
 def fleet_msg(robots, reset=False):

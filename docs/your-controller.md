@@ -15,7 +15,7 @@ At 50 Hz, the controller node gets the latest pose, evaluates the reference, and
 :start-at: "def control("
 ```
 
-The offline simulator (`camslab_offline.tracking`) calls the same function.
+The standalone simulator (`camslab_standalone.tracking`) calls the same function.
 
 ### Inputs and output
 
@@ -41,11 +41,11 @@ For $e = p^* - p$ and $S = [[0, -1], [1, 0]]$, calculate the longitudinal error 
 ## Build and test
 
 1. Edit `camslab/camslab/controller.py`.
-2. Test it offline from `camslab_offline/`:
+2. Test it without ROS from `camslab_standalone/`:
 
    ```bash
    uv run pytest tests/tracking
-   uv run python -m camslab_offline.tracking
+   uv run python -m camslab_standalone.tracking
    ```
 
 3. Restart the Gazebo simulator ({doc}`running`). With `colcon build --symlink-install`,

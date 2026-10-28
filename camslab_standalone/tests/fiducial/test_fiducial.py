@@ -16,8 +16,8 @@ from camslab.fiducial import (E3, Estimator, History, Scene, cayley_rotation, co
                               rpy_rotation, skew, translation_information,
                               translation_regression, translation_rhs)
 from camslab.types import State
-from camslab_offline.common.unicycle import step
-from camslab_offline.fiducial.study import excitation, run
+from camslab_standalone.common.unicycle import step
+from camslab_standalone.fiducial.study import excitation, run
 
 RNG = np.random.default_rng(1)
 X = np.array([0.12, -0.08, 0.18])
@@ -199,6 +199,20 @@ def test_history_keeps_its_excitation_when_full():
     history.push(("weak",), np.diag([0.0, 0.0, 1e-3]))
     assert len(history) == 10
     assert np.linalg.eigvalsh(history.G())[0] == pytest.approx(9.0)
+
+
+def test_history_sums_follow_push_and_pop():
+    rng = np.random.default_rng(3)
+    history = History(8)
+    for k in range(30):
+        Phi, y = rng.normal(size=(3, 3)), rng.normal(size=3)
+        history.push((Phi, y), Phi.T @ Phi, Phi.T @ y)
+        if k % 7 == 6:
+            history.pop(rng.integers(len(history)))
+        G, h = information(history.stacked(0), history.stacked(1))
+        assert history.G() == pytest.approx(G, abs=1e-12)
+        assert history.h() == pytest.approx(h, abs=1e-12)
+    assert len(history) == 8
 
 
 # --- step 6: the whole estimator --------------------------------------------------------

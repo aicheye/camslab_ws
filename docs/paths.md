@@ -8,6 +8,7 @@
 | `gerono` | figure eight | `x0`, `y0`, `theta0`, `a`, `b`, `period`, `phi0` |
 | `ellipse` | ellipse | `x0`, `y0`, `theta0`, `a`, `b`, `period`, `phi0` |
 | `rectangle` | rectangle | `x0`, `y0`, `theta0`, `a`, `b`, `period` |
+| `bowtie` | double triangle: two triangles that meet at the centre, corners rounded at `kappa_max` | `x0`, `y0`, `theta0`, `a`, `b`, `period`, `kappa_max` |
 | `spline` | custom closed curve (see below) | `control_points`, `period` |
 
 Change the path in the web UI by selecting a shape, entering its parameters (or pressing
@@ -17,6 +18,14 @@ The car has Ackermann steering and a minimum turning radius of about 0.34 m. A t
 path or a path faster than `w_max` still runs, but the car cannot follow those sections
 exactly. Read the warning in the web UI. Expect the tracking error to jump at each
 rectangle corner.
+
+The bow tie has corners at (±`a`, ±`b`) and visits them in the order (−a, −b), (a, b),
+(a, −b), (−a, b), so both diagonals cross at the centre. Each corner is an arc of radius
+1 / `kappa_max`, the tightest turn the car can make, so the car follows the whole path.
+The arcs need room on the short sides: with the default `kappa_max`, `b` must be at least
+about 0.6 m for `a` = 2 m and the sim rejects a bow tie whose arcs do not fit. Its
+straight edges and its two right and two left turns are the excitation the fiducial
+surveying estimator needs.
 
 ## Settings
 

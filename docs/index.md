@@ -23,7 +23,7 @@ Choose **host install** on Ubuntu 22.04 with ROS 2 already installed. Choose
     source install/setup.bash
     ros2 launch camslab gazebo_multi.launch.py
 
-Open <http://localhost:8000>.
+Open <http://127.0.0.1:8000>.
 ```
 
 ```{toctree}

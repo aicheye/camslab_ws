@@ -4,16 +4,16 @@
 # Same trajectory and gains as camslab/camslab/types.py Params.
 /**/controller:
   ros__parameters:
-    # Trajectory. (x0, y0, theta0): circle start pose, or Gerono / ellipse / rectangle centre and axis.
-    shape: circle      # circle, gerono, ellipse, rectangle or spline
+    # Trajectory. (x0, y0, theta0): circle start pose, or Gerono / ellipse / rectangle / bowtie centre and axis.
+    shape: circle      # circle, gerono, ellipse, rectangle, bowtie or spline
     x0: 2.0            # [m]
     y0: 1.0            # [m]
     theta0: 0.0        # [rad]
     circle_speed: 0.3  # circle: constant speed [m/s]
     kappa: 1.0         # circle: curvature 1/r [1/m], 0 is a straight line
-    a: 2.0             # gerono, ellipse: half the long axis; rectangle: half the side along theta0 [m]
-    b: 1.0             # ellipse: half the short axis; rectangle: half the other side [m]
-    period: 40.0       # gerono, ellipse, rectangle, spline: time for one lap [s]
+    a: 2.0             # gerono, ellipse: half the long axis; rectangle, bowtie: half the side along theta0 [m]
+    b: 1.0             # ellipse: half the short axis; rectangle, bowtie: half the other side [m]
+    period: 40.0       # gerono, ellipse, rectangle, bowtie, spline: time for one lap [s]
     phi0: 0.0          # gerono, ellipse: lap angle at t = 0 [rad]
     # spline: control points [x0, y0, x1, y1, ...] [m], at least 4 points, numbers with a
     # decimal point. The path goes around them and stays inside their outline.

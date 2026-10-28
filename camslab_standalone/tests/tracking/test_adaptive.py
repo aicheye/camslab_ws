@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 from camslab.adaptive import COLUMNS, Estimator, Path, filter_matrices
 
-from camslab_offline.common.unicycle import step
-from camslab_offline.tracking.simulate import (PathObserver, estimate_fields, make_observer,
+from camslab_standalone.common.unicycle import step
+from camslab_standalone.tracking.simulate import (PathObserver, estimate_fields, make_observer,
                                                simulate)
 from camslab.trajectory import make_shape
 from camslab.types import Params, State
@@ -57,7 +57,7 @@ def test_truth_is_nan_on_a_straight_side():
                                                         params.y0]))))
 
 
-@pytest.mark.parametrize("shape", ["gerono", "ellipse", "rectangle", "spline"])
+@pytest.mark.parametrize("shape", ["gerono", "ellipse", "rectangle", "bowtie", "spline"])
 def test_estimator_runs_on_every_shape(shape):
     params = Params(shape=shape)
     rows = simulate(State.from_pose(2.0, 1.0, 0.0), params, 0.02, 20.0, PathObserver(params))

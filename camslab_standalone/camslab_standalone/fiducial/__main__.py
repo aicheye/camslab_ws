@@ -1,4 +1,4 @@
-"""Fiducial surveying study: python -m camslab_offline.fiducial [--runs N] [--no-plot]."""
+"""Fiducial surveying study: python -m camslab_standalone.fiducial [--runs N] [--no-plot]."""
 
 import argparse
 
@@ -6,7 +6,7 @@ from .study import ERROR_NAMES, monte_carlo, run
 
 
 def main():
-    ap = argparse.ArgumentParser(prog="camslab_offline.fiducial", description=__doc__,
+    ap = argparse.ArgumentParser(prog="camslab_standalone.fiducial", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--t-max", type=float, default=35.0)
     ap.add_argument("--dt", type=float, default=0.05, help="camera sample period, s")

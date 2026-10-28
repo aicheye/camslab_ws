@@ -11,6 +11,8 @@ from .types import Params
 
 FIELDS = ("r", "c_x", "c_y")
 COLUMNS = tuple(f + "_hat" for f in FIELDS) + tuple(f + "_true" for f in FIELDS)
+# The web UI plot of the sample columns, see camslab_webui.server.adaptive_config().
+PLOTS = [{"caption": "Estimates, dashed: true values", "fields": list(COLUMNS), "log": False}]
 
 
 def filter_matrices(lam: float, n: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -78,7 +80,7 @@ class Path:
 
 
 class Estimator:
-    """The estimator part of ode() in camslab_offline/path_circle/circle.py, without the
+    """The estimator part of ode() in camslab_standalone/path_circle/circle.py, without the
     plant. It only observes: the controller tracks the true trajectory.
 
     X = [xi_f (5 filter states), r_hat, c_x_hat, c_y_hat], one filter state per signal in

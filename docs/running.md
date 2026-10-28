@@ -17,7 +17,7 @@ with `config:=/path/to/sim.yaml`. Override matching settings with launch argumen
 as `gui:=true`.
 
 Wait about 20 seconds for RViz and the car to start following the default path. Open the
-web UI at <http://localhost:8000>. Stop the simulator with `Ctrl + C`. Add `gui:=true` to
+web UI at <http://127.0.0.1:8000>. Stop the simulator with `Ctrl + C`. Add `gui:=true` to
 the launch command to open the Gazebo window.
 
 In RViz, the orange line is the path and the orange arrow is the reference point $p^*$. If a safe area is set, it is drawn as a red outline.
@@ -44,7 +44,7 @@ Use (0, 0) as the bottom-left map origin. Scroll to zoom and drag to pan. Read e
 and warnings at the top of the page.
 
 If the browser cannot connect, keep the launch terminal running while the web server
-starts after the ROS nodes. Open `http://localhost:8000`, or change `port` in
+starts after the ROS nodes. Open `http://127.0.0.1:8000`, or change `port` in
 `config/sim.yaml` when another process uses port 8000.
 
 ## Record a run

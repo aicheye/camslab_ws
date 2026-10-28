@@ -14,10 +14,10 @@ circle is fixed, so `c` and `r` are constant, as your sheet's derivation assumes
 estimator runs in the tracking simulator and in Gazebo as `camslab.adaptive`
 (see the developer reference).
 
-Run everything from `camslab_offline/`:
+Run everything from `camslab_standalone/`:
 
     uv run pytest tests/path_circle
-    uv run python -m camslab_offline.path_circle
+    uv run python -m camslab_standalone.path_circle
 
 ## Problem statement
 

@@ -5,7 +5,7 @@ The plant is
     dp/dt = v q
     dq/dt = w S q,    S = [[0, -1], [1, 0]]
 
-`camslab_offline/camslab_offline/tracking/simulate.py` samples the controller every `dt` and holds `v` and `w` constant
+`camslab_standalone/camslab_standalone/tracking/simulate.py` samples the controller every `dt` and holds `v` and `w` constant
 until the next sample (zero-order hold). This is also what the real robot does: the
 ROS controller publishes `cmd_vel` at 50 Hz and the car holds each command. So
 `step(state, v, w, dt)` only has to solve the ODE over one interval with constant inputs.

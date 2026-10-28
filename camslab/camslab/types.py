@@ -20,7 +20,7 @@ class State:
                    q=np.array([np.cos(theta), np.sin(theta)]))
 
 
-SHAPES = ("circle", "gerono", "ellipse", "rectangle", "spline")
+SHAPES = ("circle", "gerono", "ellipse", "rectangle", "bowtie", "spline")
 
 
 @dataclass
