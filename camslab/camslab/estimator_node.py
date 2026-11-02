@@ -1,8 +1,11 @@
 """Runs an adaptive estimator on a robot's pose and publishes the estimate.
 
 `estimator` selects camslab.adaptive ("path": the circle that fits the path) or
-camslab.fiducial ("fiducial": the camera extrinsic and the marker poses, with the pose
-sensor simulated from the parameters in config/fiducial.yaml).
+camslab.fiducial ("fiducial": the camera extrinsic and the marker poses). The fiducial
+estimator's `sensor` is "simulated" (the camera and markers of config/fiducial.yaml,
+observed from the robot pose) or "aruco" (the marker poses published by aruco_node on
+`observations`, with the robot pose interpolated to the image time; the truth is unknown,
+so the error columns are NaN and the covariance radii are the accuracy measure).
 """
 
 import json
@@ -16,15 +19,17 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import ColorRGBA, Float64MultiArray, MultiArrayDimension
 from std_srvs.srv import Trigger
+from tf2_msgs.msg import TFMessage
 from visualization_msgs.msg import Marker, MarkerArray
 
 from . import adaptive, fiducial
+from .aruco import PoseHistory
 from .types import Params
 
 PATH_NAMES = ("shape", "x0", "y0", "theta0", "kappa", "circle_speed", "a", "b", "period",
               "phi0", "control_points", "kappa_max", "w_max", "v_max")
 FIDUCIAL_GAINS = ("gamma_x", "gamma_t", "gamma_m", "gamma_j", "alpha_x", "alpha_t",
-                  "psi_min", "straight_tol", "d_min", "d_step", "l_buffer")
+                  "psi_min", "psi_max", "straight_tol", "d_min", "d_step", "l_buffer")
 MARKER_RATE = 10.0
 TRUE_COLOR = ColorRGBA(r=0.6, g=0.6, b=0.6, a=0.6)
 ESTIMATE_COLOR = ColorRGBA(r=0.12, g=0.62, b=0.54, a=1.0)
@@ -55,14 +60,28 @@ def parameter_value(value):
     return None
 
 
+def rotation_of(q) -> np.ndarray:
+    """The rotation matrix of a geometry_msgs Quaternion."""
+    x, y, z, w = q.x, q.y, q.z, q.w
+    return np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+                     [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+                     [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
+
+
 def pose_matrix(msg: PoseStamped) -> np.ndarray:
     """W_T_R from a PoseStamped, full orientation and height."""
-    o = msg.pose.orientation
-    x, y, z, w = o.x, o.y, o.z, o.w
-    R = np.array([[1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-                  [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-                  [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)]])
-    return fiducial.pose(R, [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
+    return fiducial.pose(rotation_of(msg.pose.orientation),
+                         [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
+
+
+def transform_matrix(tf) -> np.ndarray:
+    """A 4x4 pose from a geometry_msgs TransformStamped."""
+    t = tf.transform.translation
+    return fiducial.pose(rotation_of(tf.transform.rotation), [t.x, t.y, t.z])
+
+
+def stamp_seconds(stamp) -> float:
+    return stamp.sec + 1e-9 * stamp.nanosec
 
 
 def quaternion_of(R: np.ndarray):
@@ -95,10 +114,10 @@ def text_marker(ns, mid, position, text, color, frame, stamp, height=0.12):
     return m
 
 
-def error_text(e) -> str:
-    """The four errors of fiducial.ERROR_FIELDS as two lines for RViz."""
-    return (f"|x~| {e[0]:.1e}   |t~X| {1e3 * e[1]:.1f} mm\n"
-            f"max |m~j| {e[2]:.1e}   max |t~j| {1e3 * e[3]:.1f} mm")
+def error_text(e, prefix="") -> str:
+    """The four errors of fiducial.ERROR_FIELDS (or their radii) as two lines for RViz."""
+    return (f"{prefix}|x~| {e[0]:.1e}   |t~X| {1e3 * e[1]:.1f} mm\n"
+            f"{prefix}max |m~j| {e[2]:.1e}   max |t~j| {1e3 * e[3]:.1f} mm")
 
 
 def pose_marker(ns, mid, T, color, frame, stamp, kind=Marker.CUBE, scale=(0.2, 0.2, 0.02)):
@@ -121,7 +140,10 @@ class EstimatorNode(Node):
         rate = float(self.param("rate", 50.0))
         self.pose_timeout = float(self.param("pose_timeout", 0.5))
         self.kind = str(self.param("estimator", "path"))
+        self.sensor = str(self.param("sensor", "simulated"))
         self.frame = str(self.param("frame", "map"))
+        self.camera_delay = float(self.param("camera_delay", 0.0))
+        self.marker_prefix = str(self.param("marker_prefix", "marker_"))
         self.path = {n: self.get_parameter(n).value for n in PATH_NAMES if self.has_parameter(n)}
 
         self.estimate_pub = self.create_publisher(Float64MultiArray, "estimate", 10)
@@ -130,9 +152,17 @@ class EstimatorNode(Node):
         self.create_subscription(ParameterEvent, "/parameter_events", self.on_parameter_event,
                                  10)
         self.create_service(Trigger, "~/reset", self.on_reset)
+        if self.sensor == "aruco":
+            self.create_subscription(TFMessage, "observations", self.on_observations, 10)
 
         self.pose = None
         self.pose_time = None
+        self.history = PoseHistory()
+        self.pending = None          # (image time, {j: C_T_Mj}) not yet given to the estimator
+        self.marker_index = {}
+        self.n = 0
+        self.truth = None
+        self.warned_delay = False
         self.last_tick = None
         self.last_markers = -math.inf
         self.estimator = None
@@ -172,6 +202,29 @@ class EstimatorNode(Node):
         self.get_logger().info(f"path estimator on {params.shape}")
 
     def rebuild_fiducial(self):
+        gains = {name: float(self.get_parameter(name).value)
+                 for name in FIDUCIAL_GAINS if self.has_parameter(name)}
+        if self.sensor == "aruco":
+            ids = [int(i) for i in self.param("marker_ids", [0, 1, 2])]
+            heights = [float(h) for h in self.param("marker_height", [0.3, 0.3, 0.3])]
+            known = [bool(k) for k in self.param("marker_height_known", [True, True, False])]
+            if not ids or len(heights) != len(ids) or len(known) != len(ids):
+                self.estimator = None
+                self.get_logger().error("marker_ids, marker_height and marker_height_known "
+                                        "need one value per marker")
+                return
+            self.marker_index = {marker_id: j for j, marker_id in enumerate(ids)}
+            self.n = len(ids)
+            self.scene = None
+            self.truth = None
+            self.estimator = fiducial.Estimator(
+                self.n, {j: heights[j] for j in range(self.n) if known[j]}, **gains)
+            self.get_logger().info(f"fiducial estimator on ArUco markers {ids}")
+            return
+        if self.sensor != "simulated":
+            self.estimator = None
+            self.get_logger().error(f"sensor must be simulated or aruco, got {self.sensor!r}")
+            return
         positions = list(self.param("marker_position", [4.5, 1.0, 0.0, 0.5, 3.0, 0.0,
                                                         3.0, 4.0, 0.4]))
         rpys = list(self.param("marker_rpy", [0.0, 0.0, 2.5, 0.3, 0.0, -0.5, 0.0, 0.4, -1.8]))
@@ -190,15 +243,51 @@ class EstimatorNode(Node):
             tuple(self.param("camera_position", [0.18, -0.06, 0.32])), markers,
             fov=float(self.param("fov", 2 * math.pi)),
             range=float(self.param("range", 1e9)))
-        gains = {name: float(self.get_parameter(name).value)
-                 for name in FIDUCIAL_GAINS if self.has_parameter(name)}
         self.estimator = fiducial.Estimator(n, self.scene.known_heights(), **gains)
+        self.n = n
         self.truth = self.scene.truth()
         self.get_logger().info(f"fiducial estimator with {n} markers")
 
     def on_pose(self, msg):
         self.pose = msg
         self.pose_time = self.now()
+        stamp = stamp_seconds(msg.header.stamp)
+        self.history.push(stamp if stamp > 0.0 else self.pose_time, pose_matrix(msg))
+
+    def on_observations(self, msg):
+        """One camera image: the markers of marker_ids seen in it, keyed by their index."""
+        found = {}
+        stamp = None
+        for tf in msg.transforms:
+            name = tf.child_frame_id
+            if not name.startswith(self.marker_prefix):
+                continue
+            try:
+                marker_id = int(name[len(self.marker_prefix):])
+            except ValueError:
+                continue
+            if marker_id in self.marker_index:
+                found[self.marker_index[marker_id]] = transform_matrix(tf)
+                stamp = stamp_seconds(tf.header.stamp)
+        if found:
+            self.pending = (stamp, found)
+
+    def measurement(self):
+        """(W_T_R, {j: C_T_Mj}) for the next update with the ArUco sensor: the robot pose
+        at the image time of the newest observations, or the latest pose and no
+        observations when none arrived since the last update."""
+        if self.pending is None:
+            return self.history.latest(), {}
+        stamp, found = self.pending
+        self.pending = None
+        T_R = self.history.at(stamp - self.camera_delay)
+        if T_R is None:
+            if not self.warned_delay:
+                self.get_logger().warning("no robot pose at the image time; check the "
+                                          "clocks and camera_delay")
+                self.warned_delay = True
+            T_R = self.history.latest()
+        return T_R, found
 
     def on_parameter_event(self, event):
         """Follow trajectory changes made on this namespace's controller."""
@@ -243,39 +332,55 @@ class EstimatorNode(Node):
                 adaptive.COLUMNS, [*self.estimator.estimate(), *self.true_path.truth(p)],
                 plots=adaptive.PLOTS))
             return
-        T_R = pose_matrix(self.pose)
-        self.estimator.update(T_R, self.scene.observe(T_R), dt)
+        if self.scene is not None:
+            T_R = pose_matrix(self.pose)
+            observations = self.scene.observe(T_R)
+        else:
+            T_R, observations = self.measurement()
+            if T_R is None:
+                return
+        self.estimator.update(T_R, observations, dt)
         estimate = self.estimator.estimate()
-        e = fiducial.errors(estimate, self.truth, self.scene.n)
+        n = self.n
+        truth = self.truth if self.truth is not None else np.full(estimate.shape, np.nan)
+        e = (fiducial.errors(estimate, truth, n) if self.truth is not None
+             else np.full(4, np.nan))
+        radii = self.estimator.radii()
         self.estimate_pub.publish(array_msg(
-            fiducial.columns(self.scene.n),
-            [*estimate, *self.truth, *e, *self.estimator.excitation()],
+            fiducial.columns(n),
+            [*estimate, *truth, *e, *self.estimator.excitation(), *radii],
             plots=fiducial.plots(self.estimator)))
         if now - self.last_markers >= 1.0 / MARKER_RATE:
             self.last_markers = now
-            self.marker_pub.publish(self.marker_array(T_R, estimate, e))
+            self.marker_pub.publish(self.marker_array(T_R, estimate, e, radii))
 
-    def marker_array(self, T_R, estimate, e):
-        """RViz markers: the true fiducials and camera in grey, the estimates in green, and
-        the four errors of fiducial.ERROR_FIELDS as text above the car."""
-        n = self.scene.n
+    def marker_array(self, T_R, estimate, e, radii):
+        """RViz markers: the true fiducials and camera in grey (simulated sensor only),
+        the estimates in green, and the four errors of fiducial.ERROR_FIELDS, or their
+        covariance radii when the truth is unknown, as text above the car."""
+        n = self.n
         stamp = self.get_clock().now().to_msg()
         msg = MarkerArray()
-        for j, Y in enumerate(self.scene.marker_poses()):
-            msg.markers.append(pose_marker("true", j, Y, TRUE_COLOR, self.frame, stamp))
+        true_poses = self.scene.marker_poses() if self.scene is not None else [None] * n
+        for j, Y in enumerate(true_poses):
+            if Y is not None:
+                msg.markers.append(pose_marker("true", j, Y, TRUE_COLOR, self.frame, stamp))
             m_hat = estimate[6 + 3 * j:9 + 3 * j]
             t_hat = estimate[6 + 3 * n + 3 * j:9 + 3 * n + 3 * j]
             msg.markers.append(pose_marker(
                 "estimate", j, fiducial.pose(fiducial.cayley_rotation(m_hat), t_hat),
                 ESTIMATE_COLOR, self.frame, stamp))
         arrow = dict(kind=Marker.ARROW, scale=(0.25, 0.03, 0.03))
-        msg.markers.append(pose_marker("true", n, T_R @ self.scene.camera(), TRUE_COLOR,
-                                       self.frame, stamp, **arrow))
+        if self.scene is not None:
+            msg.markers.append(pose_marker("true", n, T_R @ self.scene.camera(), TRUE_COLOR,
+                                           self.frame, stamp, **arrow))
         X_hat = fiducial.pose(fiducial.cayley_rotation(estimate[0:3]), estimate[3:6])
         msg.markers.append(pose_marker("estimate", n, T_R @ X_hat, ESTIMATE_COLOR,
                                        self.frame, stamp, **arrow))
+        text = (error_text(e) if self.truth is not None
+                else error_text(np.nan_to_num(radii, nan=0.0), prefix="r "))
         msg.markers.append(text_marker("estimate", n + 1, T_R[:3, 3] + [0.0, 0.0, 0.6],
-                                       error_text(e), ESTIMATE_COLOR, self.frame, stamp))
+                                       text, ESTIMATE_COLOR, self.frame, stamp))
         return msg
 
 

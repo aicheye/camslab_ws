@@ -37,6 +37,7 @@ safety-area
 configuration
 your-controller
 custom-node
+hardware-survey
 developer
 troubleshooting
 how-it-works

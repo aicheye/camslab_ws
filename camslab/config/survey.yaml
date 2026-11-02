@@ -1,0 +1,35 @@
+# Settings of survey.launch.py: fiducial surveying on a real car with a USB camera and the
+# lab motion capture (camslab.fiducial on hardware). Pass another file with
+# config:=/path/to/file.yaml; a launch argument with the same name overrides a top-level
+# value: name:=yahboom1. The estimator gains are in fiducial.yaml.
+
+name: angostura                  # ROS namespace: the pose arrives on /<name>/pose
+
+# Pose, through vrpn_mocap. The rigid body is streamed with Z up; its frame is the robot
+# frame of the paper, x forward, at the rear-axle centre.
+mocap_server: 129.97.71.49
+mocap_port: 3883
+tracker: ""                      # rigid body name in the mocap software; empty for `name`
+
+# Camera, through usb_cam. Calibrate it first (docs/hardware-survey.md) and point
+# camera_info_url at the calibration file; without one the marker poses are wrong.
+video_device: /dev/video0
+image_width: 640
+image_height: 480
+framerate: 30.0
+pixel_format: yuyv
+camera_info_url: ""              # file:///home/jetson/.ros/camera_info/camera.yaml
+camera_delay: 0.05               # image latency: the pose is taken this long before the stamp [s]
+
+# Markers: cv2.aruco dictionary, printed side [m], the ids in the lab, and the height of
+# each marker's centre above the mocap floor [m]; only the heights flagged known reach the
+# estimator (at least one must be known, Assumption 3 of the paper).
+dictionary: DICT_4X4_50
+marker_size: 0.14
+marker_ids: [0, 1, 2]
+marker_height: [0.30, 0.30, 0.30]
+marker_height_known: [true, true, false]
+
+rviz: true
+webui: true                      # web UI on `port`
+port: 8000

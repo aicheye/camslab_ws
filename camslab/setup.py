@@ -37,6 +37,7 @@ setup(
             "controller = camslab.controller_node:main",
             "pose_tf = camslab.pose_tf:main",
             "estimator = camslab.estimator_node:main",
+            "aruco = camslab.aruco_node:main",
         ],
     },
 )
