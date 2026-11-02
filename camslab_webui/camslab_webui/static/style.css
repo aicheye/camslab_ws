@@ -157,12 +157,11 @@ input[type="number"] { width: 90px; flex: none; padding: 3px 6px; font-variant-n
 .legend { font-weight: 400; color: var(--text-secondary); margin-left: 8px; }
 .legend .key { display: inline-flex; align-items: center; gap: 4px; margin-right: 10px; }
 .legend .swatch { width: 12px; height: 3px; border-radius: 2px; display: inline-block; }
-.plot { width: 100%; height: 130px; display: block; }
+.legend .swatch.dashed { background: none !important; border-top: 2px dashed var(--text-secondary); height: 0; width: 14px; }
+.plot { width: 100%; height: 150px; display: block; }
 /* The estimator's plots, built from the backend's plot list, span both columns. */
-#adaptive-plots { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 10px; }
-#adaptive-plots:empty { display: none; }
-#adaptive-plots .plot { height: 180px; }
-#adaptive-plots figure:first-child .plot { height: 280px; }
+/* The estimator's figures sit in the grid next to the tracking ones, same size. */
+#adaptive-plots { display: contents; }
 #camera-readout { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 .axis-note { text-align: center; font-size: 11px; }
 

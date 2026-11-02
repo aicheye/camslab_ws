@@ -17,7 +17,7 @@ from camslab.fiducial import (E3, Estimator, History, Scene, cayley_rotation, co
                               translation_regression, translation_rhs)
 from camslab.types import State
 from camslab_standalone.common.unicycle import step
-from camslab_standalone.fiducial.study import excitation, run
+from camslab_standalone.fiducial.study import excitation, monte_carlo, run
 
 RNG = np.random.default_rng(1)
 X = np.array([0.12, -0.08, 0.18])
@@ -219,7 +219,7 @@ def test_history_sums_follow_push_and_pop():
 
 
 def test_study_converges_without_noise():
-    t, e = run(t_max=35.0, dt=0.05)
+    t, e, _ = run(t_max=35.0, dt=0.05)
     assert e.shape == (t.size, 4)
     assert e[0] == pytest.approx([np.linalg.norm(X), np.linalg.norm(T_X), e[0, 2], e[0, 3]])
     assert np.all(e[-1] < 1e-6)
@@ -247,3 +247,25 @@ def test_a_circle_leaves_the_orientation_unidentified():
 def test_excitation_alternates_straight_and_turns():
     assert excitation(1.0) == (0.5, 0.0)
     assert excitation(5.0)[1] > 0 > excitation(11.0)[1]
+
+
+def test_covariance_radius_bounds_the_monte_carlo_error():
+    """Section VI: over noisy runs the RMSE of every error stays inside the predicted
+    99.73 % radius of eq. (31), and the radius is of the same order, not a vacuous bound."""
+    t, rmse, radius = monte_carlo(4, seed=0, t_max=35.0, dt=0.05)
+    assert np.all(np.isfinite(radius[-1]))
+    assert np.all(rmse[-1] < radius[-1])
+    assert np.all(radius[-1] < 50.0 * rmse[-1])
+
+
+def test_rotation_pairs_stay_below_psi_max():
+    """A partner with a relative rotation above psi_max is not used: at 170 degrees the
+    Cayley vector tan(angle / 2) is 11 and would amplify the noise of the pair."""
+    scene = Scene(markers=paper_markers())
+    for angle, pairs in ((math.radians(120.0), 1), (math.radians(170.0), 0)):
+        estimator = Estimator(scene.n, scene.known_heights())
+        for yaw in (0.0, angle):
+            state = State.from_pose(0.3 * yaw, 0.0, yaw)
+            T_R = robot_pose(state)
+            estimator.update(T_R, {0: scene.observe(T_R)[0]}, 0.0)
+        assert len(estimator.H_t) == pairs

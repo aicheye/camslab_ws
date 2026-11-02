@@ -2,6 +2,7 @@
 
 import argparse
 
+from .figures import TITLES
 from .study import ERROR_NAMES, monte_carlo, run
 
 
@@ -15,32 +16,32 @@ def main():
                          "once without noise")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--no-plot", action="store_true")
+    ap.add_argument("--out", metavar="PNG", help="write the figure instead of showing it")
     args = ap.parse_args()
 
     if args.runs > 0:
-        t, e = monte_carlo(args.runs, args.seed, t_max=args.t_max, dt=args.dt)
-        label = f"RMSE over {args.runs} noisy runs"
+        t, e, r = monte_carlo(args.runs, args.seed, t_max=args.t_max, dt=args.dt)
+        label = "Simulation study with measurement noise"
     else:
-        t, e = run(args.t_max, args.dt)
-        label = "error without noise"
+        t, e, r = run(args.t_max, args.dt)
+        label = "Simulation study without measurement noise"
     print(f"{label} at t = {t[-1]:.1f} s")
-    for name, value in zip(ERROR_NAMES, e[-1]):
-        print(f"  {name:<22} {value:.3e}")
+    for name, value, radius in zip(ERROR_NAMES, e[-1], r[-1]):
+        print(f"  {name:<22} {value:.3e}   radius {radius:.3e}")
 
     if args.no_plot:
         return
-    import matplotlib.pyplot as plt
+    from .figures import error_figure
 
-    fig, axes = plt.subplots(2, 2, sharex=True, figsize=(10, 6))
-    for ax, name, column in zip(axes.ravel(), ERROR_NAMES, e.T):
-        ax.semilogy(t, column)
-        ax.set_ylabel(name)
-        ax.grid(True, which="both", alpha=0.3)
-    for ax in axes[-1]:
-        ax.set_xlabel("t [s]")
-    fig.suptitle(label)
-    plt.tight_layout()
-    plt.show()
+    fig = error_figure(t, e, r, TITLES,
+                       "Monte Carlo RMSE" if args.runs > 0 else "Error", "99.73 % radius",
+                       f"{label} ({args.runs} runs)" if args.runs > 0 else label)
+    if args.out:
+        fig.savefig(args.out, dpi=200)
+        print(f"figure written to {args.out}")
+    else:
+        import matplotlib.pyplot as plt
+        plt.show()
 
 
 if __name__ == "__main__":

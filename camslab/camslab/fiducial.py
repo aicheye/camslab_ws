@@ -30,6 +30,11 @@ ERROR_FIELDS = ("e_x", "e_tX", "e_m", "e_t")
 # lambda_min(G_x), lambda_min(G_t) and the sizes of the three history buffers H_x, H_t, H_h
 # of Section VII: how the information accumulates and when the camera laws switch on.
 EXCITATION_FIELDS = ("lam_x", "lam_t", "n_x", "n_t", "n_h")
+# The 99.73 % covariance radii of eq. (31), the dashed curves of Fig. 1, one per error
+# of ERROR_FIELDS; the marker ones are the maximum over the markers.
+RADIUS_FIELDS = ("r_x", "r_tX", "r_m", "r_t")
+# chi^2 quantile with 3 degrees of freedom at 0.9973 (scipy.stats.chi2.ppf(0.9973, 3))
+CHI2_3_9973 = 14.15625
 
 
 def fields(n_markers: int) -> tuple[str, ...]:
@@ -43,26 +48,43 @@ def fields(n_markers: int) -> tuple[str, ...]:
 
 
 def columns(n_markers: int) -> tuple[str, ...]:
-    """Sample-row columns: every estimate, every true value, the four errors, then the
-    excitation of EXCITATION_FIELDS."""
+    """Sample-row columns: every estimate, every true value, the four errors, the
+    excitation of EXCITATION_FIELDS, then the four covariance radii of RADIUS_FIELDS."""
     f = fields(n_markers)
     return (tuple(n + "_hat" for n in f) + tuple(n + "_true" for n in f) + ERROR_FIELDS
-            + EXCITATION_FIELDS)
+            + EXCITATION_FIELDS + RADIUS_FIELDS)
 
 
 def plots(estimator) -> list:
-    """The web UI's plots of the sample columns: the four errors of Fig. 1 on a log axis,
-    and lambda_min of G_x and G_t against the gates alpha_x and alpha_t of eq. (13) and
-    (21). Each plot is {"caption", "fields", "log", "refs": [{"value", "label", "field"}],
-    "tooltip": [fields shown on hover only]}."""
+    """The web UI's plots of the sample columns, Fig. 1 of the paper in two panels: the
+    camera errors and the marker errors on a log axis, each with its covariance radius
+    dashed. The camera panel's tooltip adds the excitation, lambda_min of G_x and G_t
+    against the gates alpha_x and alpha_t, and the history sizes. Each plot is
+    {"caption", "fields", "log", "dashed": {field: field whose colour it takes},
+    "dashed_label": legend entry for the dashed fields, "tooltip": [fields shown on
+    hover only]}."""
     return [
-        {"caption": "Estimation errors, log scale, as Fig. 1 of the paper",
-         "fields": list(ERROR_FIELDS), "log": True},
-        {"caption": "Excitation \u03bbmin(G), dashed: the gates \u03b1 that switch the camera laws on",
-         "fields": ["lam_x", "lam_t"], "log": True, "tooltip": ["n_x", "n_t", "n_h"],
-         "refs": [{"value": float(estimator.alpha_x), "label": "\u03b1_x", "field": "lam_x"},
-                  {"value": float(estimator.alpha_t), "label": "\u03b1_t", "field": "lam_t"}]},
+        {"caption": "Camera extrinsic error",
+         "fields": ["e_x", "e_tX", "r_x", "r_tX"], "log": True,
+         "dashed": {"r_x": "e_x", "r_tX": "e_tX"}, "dashed_label": "99.73 % radius",
+         "tooltip": list(EXCITATION_FIELDS)},
+        {"caption": "Fiducial pose error, worst marker",
+         "fields": ["e_m", "e_t", "r_m", "r_t"], "log": True,
+         "dashed": {"r_m": "e_m", "r_t": "e_t"}, "dashed_label": "99.73 % radius"},
     ]
+
+
+@dataclass(frozen=True)
+class Noise:
+    """Standard deviations of the measurement noise, the values of the paper's Monte
+    Carlo study (Section VIII). The simulators add this noise to what the estimator
+    receives; the estimator uses it for the covariance prediction of Section VI."""
+
+    robot_position: float = 0.2e-3      # [m] per axis
+    robot_yaw: float = math.radians(0.01)
+    marker_position: float = 1e-3      # [m] per axis, in the camera frame
+    marker_rotation: float = math.radians(0.1)  # [rad], small rotation per axis
+    height: float = 0.2e-3             # [m], one offset per run and marker
 
 
 # --- Cayley rotation coordinates (Section II.B) -----------------------------------------
@@ -362,6 +384,58 @@ def marker_position_observation(
     return p_R + R_R @ (t_X + rotate(x, z))
 
 
+# --- First-order covariance (Section VI) --------------------------------------------------
+
+
+def cayley_rate(g: np.ndarray) -> np.ndarray:
+    """C(g) with dg = C(g) w for a small rotation R(g) <- R(g) Exp(w) in the body frame:
+    C(g) = (I + [g]_x + g g^T) / 2, the Cayley (Gibbs) vector kinematics."""
+    return 0.5 * (I3 + skew(g) + np.outer(g, g))
+
+
+def rotate_jacobian(g: np.ndarray, v: np.ndarray, eps: float = 1e-6) -> np.ndarray:
+    """d(R(g) v) / dg by central differences, (3, 3) for one vector v or (n, 3, 3) for
+    (n, 3) vectors, the Jacobian J_R(x, z) of eq. (30)."""
+    v = np.asarray(v, float)
+    J = np.zeros(v.shape + (3,))
+    for k in range(3):
+        d = np.zeros(3)
+        d[k] = eps
+        J[..., k] = (rotate(g + d, v) - rotate(g - d, v)) / (2.0 * eps)
+    return J
+
+
+def relative_rotation_covariances(p, q, R_B, t_Mk, u, d, noise: Noise):
+    """The measurement covariances of a rotation pair (eq. (7)) and its relative-pose
+    translation tuple (eq. (19)): Sigma of the Cayley vectors p (robot, from the two yaw
+    readings) and q (marker, from the two marker rotations), and of the translations
+    d = t_A (robot displacement) and u = t_B (marker displacement), from the paper's
+    independent noise on the two observations of the pair."""
+    C_p, C_q = cayley_rate(p), cayley_rate(q)
+    Sig_p = 2.0 * noise.robot_yaw**2 * np.outer(C_p @ E3, C_p @ E3)
+    Sig_q = 2.0 * noise.marker_rotation**2 * C_q @ C_q.T
+    Sig_d, Sig_u = translation_pair_covariances(R_B, t_Mk, u, d, noise)
+    return Sig_p, Sig_q, Sig_d, Sig_u
+
+
+def translation_pair_covariances(R_B, t_Mk, u, d, noise: Noise):
+    """Sigma of d = t_A, the robot displacement in the robot frame, and of
+    u = t_B = t_Mi - R_B t_Mk, the marker displacement in the camera frame, for the two
+    observations of a pair: position noise on both robot poses, the yaw noise of the
+    first pose rotating d, position noise on both marker readings and the two marker
+    rotation noises rotating R_B t_Mk."""
+    e3_d = np.cross(E3, d)
+    Sig_d = 2.0 * noise.robot_position**2 * I3 + noise.robot_yaw**2 * np.outer(e3_d, e3_d)
+    v = skew(R_B @ t_Mk)
+    Sig_u = 2.0 * noise.marker_position**2 * I3 + 2.0 * noise.marker_rotation**2 * v @ v.T
+    return Sig_d, Sig_u
+
+
+def covariance_radius(P: np.ndarray) -> float:
+    """b_0.9973 of eq. (31) with a zero mean error: sqrt(chi2_{3, 0.9973} lambda_max(P))."""
+    return float(math.sqrt(CHI2_3_9973 * max(np.linalg.eigvalsh(P)[-1], 0.0)))
+
+
 # --- The estimator (Sections III to V and VII) ------------------------------------------
 
 
@@ -462,7 +536,7 @@ class Estimator:
     the observations of that marker over the last l_buffer of travel: the partner with the
     largest displacement among those with a relative rotation of at most straight_tol and
     a displacement of at least d_min gives a pure-translation pair, eq. (8), and the
-    partner with the largest relative rotation, if at least psi_min, gives a rotation
+    partner with the largest relative rotation between psi_min and psi_max gives a rotation
     pair, eq. (7), plus a relative-pose translation tuple for eq. (19) and (20). A
     known-height observation, eq. (18), is stored at every attempt.
 
@@ -489,13 +563,18 @@ class Estimator:
         n_t: int = 120,
         n_h: int = 80,
         psi_min: float = math.radians(30.0),
+        psi_max: float = math.radians(150.0),
         straight_tol: float = 5e-4,
         d_min: float = 0.2,
         d_step: float = 0.1,
         l_buffer: float = 4.0,
+        noise: Noise | None = None,
     ):
         self.n = n_markers
         self.heights = dict(heights)
+        # The measurement noise assumed by the covariance prediction of Section VI.
+        self.noise = Noise() if noise is None else noise
+        self._marker_cov = {}
         self.gamma_x, self.gamma_t, self.gamma_m, self.gamma_j = (
             gamma_x,
             gamma_t,
@@ -503,7 +582,8 @@ class Estimator:
             gamma_j,
         )
         self.alpha_x, self.alpha_t = alpha_x, alpha_t
-        self.psi_min, self.straight_tol, self.d_min = psi_min, straight_tol, d_min
+        self.psi_min, self.psi_max = psi_min, psi_max
+        self.straight_tol, self.d_min = straight_tol, d_min
         self.d_step, self.l_buffer = d_step, l_buffer
         # The bounded history buffers of Section VII: orientation regressions for G_x and
         # h_x, raw relative-pose tuples (Phi_t, t_A, t_B) for G_t, and known-height
@@ -540,29 +620,41 @@ class Estimator:
                     and (straight is None or dist > straight[0])
                 ):
                     straight = (dist, T_Ri, T_Mi, A)
-                if angle >= self.psi_min and (rotation is None or angle > rotation[0]):
+                # psi_max keeps the pair away from the Cayley chart's singularity at
+                # pi, where tan(angle / 2) amplifies the measurement noise without bound
+                if (self.psi_min <= angle <= self.psi_max
+                        and (rotation is None or angle > rotation[0])):
                     rotation = (angle, T_Ri, T_Mi, A)
+            # Each history entry also carries the covariances of its two measured
+            # vectors for Section VI: (Phi, y, Sigma_a, Sigma_b) with the residual
+            # r = (I + [x]_x) b - (I - [x]_x) a, where (a, b) is (p, q) for a rotation
+            # pair and (d, u) for a pure-translation pair.
             if straight is not None:
                 _, _, T_Mi, A = straight
                 B = T_Mi @ inverse(T_M)
-                Phi, y = translation_regression(B[:3, 3], A[:3, 3])
-                self.H_x.push((Phi, y), *information(Phi[None], y[None]))
+                d, u = A[:3, 3], B[:3, 3]
+                Phi, y = translation_regression(u, d)
+                Sig_d, Sig_u = translation_pair_covariances(B[:3, :3], T_M[:3, 3], u, d,
+                                                            self.noise)
+                self.H_x.push((Phi, y, Sig_d, Sig_u), *information(Phi[None], y[None]))
             if rotation is not None:
                 _, _, T_Mi, A = rotation
                 B = T_Mi @ inverse(T_M)
-                Phi, y = rotation_regression(
-                    rotation_cayley(A[:3, :3]), rotation_cayley(B[:3, :3])
-                )
-                self.H_x.push((Phi, y), *information(Phi[None], y[None]))
+                p, q = rotation_cayley(A[:3, :3]), rotation_cayley(B[:3, :3])
+                Phi, y = rotation_regression(p, q)
+                Sig_p, Sig_q, Sig_d, Sig_u = relative_rotation_covariances(
+                    p, q, B[:3, :3], T_M[:3, 3], B[:3, 3], A[:3, 3], self.noise)
+                self.H_x.push((Phi, y, Sig_p, Sig_q), *information(Phi[None], y[None]))
                 Phi_t = A[:3, :3] - I3
-                self.H_t.push((Phi_t, A[:3, 3], B[:3, 3]),
-                                      translation_information(Phi_t[None], 0))
+                self.H_t.push((Phi_t, A[:3, 3], B[:3, 3], Sig_d, Sig_u),
+                              translation_information(Phi_t[None], 0))
             buffer.append((self.travel, T_R, T_M))
             while buffer and buffer[0][0] < self.travel - self.l_buffer:
                 del buffer[0]
             if j in self.heights:
                 self.H_h.push(
-                    (self.heights[j], T_R[2, 3], T_M[:3, 3]), translation_information(np.zeros((0, 3, 3)), 1)
+                    (self.heights[j], T_R[2, 3], T_M[:3, 3], j),
+                    translation_information(np.zeros((0, 3, 3)), 1),
                 )
 
     def make_tick(self, T_R: np.ndarray, observations: dict) -> Tick:
@@ -684,3 +776,104 @@ class Estimator:
         if self.tick is None:
             return False, False
         return self.tick.ready_x, self.tick.ready_t
+
+    # -- Section VI: first-order covariance ---------------------------------------------
+
+    def covariance(self) -> dict:
+        """The first-order covariances of the estimates for self.noise, Section VI:
+        "x" P_x (3, 3) of eq. (28), "tX" P_tX (3, 3) of eq. (29), "m" (n, 3, 3) and "t"
+        (n, 3, 3) of the markers from eq. (30) and its orientation analogue, evaluated
+        at the current estimate. An entry is None until the corresponding law has
+        switched on (P_x needs G_x >= alpha_x I, the rest also G_t >= alpha_t I); a
+        marker keeps the covariance of its latest observation.
+
+        P_x = G_x^-1 (sum_l Phi_l^T S_l Phi_l) G_x^-1 with S_l from the stored
+        measurement covariances. P_tX adds the propagated orientation uncertainty
+        K P_x K^T, K = sum_i Phi_t,i^T dy_t,i/dx, and the run-wise height datum, which
+        is common to all height entries of one marker. The marker covariances take
+        the latest observation of eq. (23) and (25) through the Jacobians of eq. (30)
+        with the joint covariance of [x, t_X], plus the robot and marker noise of that
+        observation; the averaging of the marker laws (24) and (26) is not credited.
+        """
+        tick, noise = self.tick, self.noise
+        n = self.n
+        out = {"x": None, "tX": None,
+               "m": np.full((n, 3, 3), np.nan), "t": np.full((n, 3, 3), np.nan)}
+        if tick is None or not tick.ready_x or len(self.H_x) == 0:
+            return out
+        x, tX = self.X[0:3], self.X[3:6]
+        A, B = I3 - skew(x), I3 + skew(x)
+        Phi, Sig_a, Sig_b = (self.H_x.stacked(k) for k in (0, 2, 3))
+        S = B @ Sig_b @ B.T + A @ Sig_a @ A.T
+        G_x_inv = np.linalg.inv(tick.G_x)
+        P_x = G_x_inv @ np.einsum("nki,nkl,nlj->ij", Phi, S, Phi) @ G_x_inv
+        out["x"] = P_x
+        if not tick.ready_t:
+            return out
+
+        # eq. (29): direct noise of the stored translation relations, then K P_x K^T
+        R = cayley_rotation(x)
+        M = np.zeros((3, 3))
+        K = np.zeros((3, 3))
+        if len(self.H_t):
+            Phi_t, t_B, Sig_A, Sig_B = (self.H_t.stacked(k) for k in (0, 2, 3, 4))
+            S_t = R @ Sig_B @ R.T + Sig_A
+            M += np.einsum("nki,nkl,nlj->ij", Phi_t, S_t, Phi_t)
+            K += np.einsum("nki,nkj->ij", Phi_t, rotate_jacobian(x, t_B))
+        if len(self.H_h):
+            z, who = self.H_h.stacked(2), self.H_h.stacked(3)
+            per_marker = np.bincount(who.astype(int))
+            direct = len(self.H_h) * (noise.robot_position**2 + noise.marker_position**2)
+            datum = noise.height**2 * float(np.sum(per_marker.astype(float) ** 2))
+            M += (direct + datum) * np.outer(E3, E3)
+            K -= np.outer(E3, E3 @ rotate_jacobian(x, z).sum(axis=0))
+        G_t_inv = np.linalg.inv(tick.G_t)
+        P_tX = G_t_inv @ (M + K @ P_x @ K.T) @ G_t_inv
+        out["tX"] = P_tX
+        # joint covariance of [x, t_X]: t~_X = G_t^-1 (Phi_t^T eps_t + K x~)
+        cross = P_x @ K.T @ G_t_inv
+        P_c = np.block([[P_x, cross], [cross.T, P_tX]])
+
+        # eq. (30) and its orientation analogue for every visible marker
+        R_R, p_R = tick.R_R, tick.p_R
+        for j in range(n):
+            if tick.chi[j] == 0.0:
+                continue
+            z, R_b = tick.z[j], tick.R_b[j]
+            J_c = np.hstack((R_R @ rotate_jacobian(x, z), R_R))
+            w = R_R @ (tX + rotate(x, z))
+            e3_w = np.cross(E3, w)
+            P_t = (J_c @ P_c @ J_c.T
+                   + (noise.marker_position**2 + noise.robot_position**2) * I3
+                   + noise.robot_yaw**2 * np.outer(e3_w, e3_w))
+            m = marker_orientation_observation(R_R, x, R_b)
+            J_m = np.zeros((3, 3))
+            for k in range(3):
+                d = np.zeros(3)
+                d[k] = 1e-6
+                J_m[:, k] = (marker_orientation_observation(R_R, x + d, R_b)
+                             - marker_orientation_observation(R_R, x - d, R_b)) / 2e-6
+            C = cayley_rate(m)
+            u = (R_R @ R @ R_b).T @ E3
+            P_m = (J_m @ P_x @ J_m.T
+                   + C @ (noise.marker_rotation**2 * I3
+                          + noise.robot_yaw**2 * np.outer(u, u)) @ C.T)
+            self._marker_cov[j] = (P_m, P_t)
+        for j, (P_m, P_t) in self._marker_cov.items():
+            out["m"][j], out["t"][j] = P_m, P_t
+        return out
+
+    def radii(self) -> np.ndarray:
+        """RADIUS_FIELDS: the radius of eq. (31) for the four errors of ERROR_FIELDS,
+        the marker ones the maximum over the markers. NaN until defined."""
+        P = self.covariance()
+        r = np.full(4, np.nan)
+        if P["x"] is not None:
+            r[0] = covariance_radius(P["x"])
+        if P["tX"] is not None:
+            r[1] = covariance_radius(P["tX"])
+        known = [j for j in range(self.n) if np.all(np.isfinite(P["t"][j]))]
+        if known:
+            r[2] = max(covariance_radius(P["m"][j]) for j in known)
+            r[3] = max(covariance_radius(P["t"][j]) for j in known)
+        return r

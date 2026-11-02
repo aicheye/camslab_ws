@@ -153,7 +153,31 @@ paper.
 `python -m camslab_standalone.fiducial` replays the paper's simulation study: 35 s of
 alternating straight segments and turns at 20 Hz, with the paper's camera and markers.
 `--runs N` adds the paper's measurement noise and reports the root-mean-square error over
-N runs. The covariance radii of the paper are not computed.
+N runs against the 99.73 % covariance radius of Section VI, the solid and dashed curves of
+the paper's Fig. 1; `--out fig.png` writes the figure. The tracking simulator adds the
+same noise to what the fiducial estimator receives (`camslab_standalone/fiducial/noise.py`)
+and the web UI plots the radius dashed next to each error.
+
+`python -m camslab_standalone.fiducial.offline` checks a track independently of the
+adaptive laws: it replays the trajectory shown by the running web UI with the paper's
+noise, fits the camera extrinsic and the marker poses to every recorded observation at
+once by nonlinear least squares, and plots the online error against that batch optimum.
+A batch fit that reaches the truth while the online estimate does not points at the pair
+selection; a batch Jacobian with a tiny singular value means the track itself does not
+determine a parameter.
+
+On a real car the sensor is `camslab/camslab/aruco_node.py`: ArUco detection with OpenCV
+on the `usb_cam` image, each marker pose published as a transform `marker_<id>` in the
+camera frame on `observations`. The estimator node with `sensor: aruco` pairs those with
+the motion capture pose interpolated to the image time (`camslab.aruco.PoseHistory`) and
+publishes NaN for the errors, since the truth is unknown; the covariance radii are the
+accuracy measure. `survey.launch.py` with `config/survey.yaml` starts the whole chain, see
+{doc}`hardware-survey`.
+
+Rotation pairs use a relative rotation between `psi_min` and `psi_max` (30 and 150
+degrees). The upper bound keeps the pairs away from the Cayley chart's singularity at
+180 degrees, where `tan(angle / 2)` amplifies the measurement noise without bound; without
+it, tracks with tight lobes switched the orientation law on with a noise-fitted estimate.
 
 ## Fleet behavior
 

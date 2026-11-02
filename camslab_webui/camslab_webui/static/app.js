@@ -38,6 +38,14 @@ const ESTIMATE_LABELS = {
   n_x: 'orientation regressions',
   n_t: 'translation tuples',
   n_h: 'height observations',
+  r_x: 'radius of ‖x̃‖',
+  r_tX: 'radius of ‖t̃X‖ [m]',
+  r_m: 'radius of max ‖m̃j‖',
+  r_t: 'radius of max ‖t̃j‖ [m]',
+  noise_pR: 'robot ‖δp‖ [m]',
+  noise_yaw: 'robot |δψ| [rad]',
+  noise_z: 'marker ‖δz‖ [m]',
+  noise_b: 'marker ‖δφ‖ [rad]',
 };
 const estimateLabel = (name) => ESTIMATE_LABELS[name] || name;
 const LOG_FLOOR = 1e-9;
@@ -299,8 +307,9 @@ function fillSelect(select, values, labels = {}) {
 }
 
 // The estimator's time plots, one figure per entry of the config's plot list. Fields
-// ending in _true are dashed in the colour of their _hat; refs are dashed horizontal
-// lines, and refs with the same value share one line and one label ("α_x = α_t").
+// ending in _true, and fields listed in the spec's "dashed" map, are dashed in the colour
+// of their _hat or mapped field; refs are dashed horizontal lines, and refs with the same
+// value share one line and one label ("α_x = α_t").
 function syncAdaptivePlots(a) {
   const box = $('adaptive-plots');
   const specs = (a.plots || []).map((p) => ({ ...p, fields: p.fields.filter((f) => a.fields.includes(f)) }))
@@ -311,21 +320,26 @@ function syncAdaptivePlots(a) {
   for (let i = plots.length - 1; i >= 0; i--) if (plots[i].adaptive) plots.splice(i, 1);
   box.replaceChildren();
   for (const spec of specs) {
-    const names = [...new Set(spec.fields.map((f) => f.replace(/_(hat|true)$/, '')))];
-    const color = (f) => colors[ESTIMATE_COLORS[names.indexOf(f.replace(/_(hat|true)$/, '')) % ESTIMATE_COLORS.length]];
+    const dashed = spec.dashed || {};
+    const base = (f) => (dashed[f] || f).replace(/_(hat|true)$/, '');
+    const names = [...new Set(spec.fields.map(base))];
+    const color = (f) => colors[ESTIMATE_COLORS[names.indexOf(base(f)) % ESTIMATE_COLORS.length]];
     const figure = document.createElement('figure');
     const caption = document.createElement('figcaption');
     const legend = document.createElement('span');
     legend.className = 'legend';
-    legend.replaceChildren(...names.map((name) => {
+    const keyOf = (label, background, dashedSwatch) => {
       const key = document.createElement('span');
       key.className = 'key';
       const swatch = document.createElement('span');
-      swatch.className = 'swatch';
-      swatch.style.background = color(name);
-      key.append(swatch, estimateLabel(name));
+      swatch.className = dashedSwatch ? 'swatch dashed' : 'swatch';
+      swatch.style.background = background;
+      key.append(swatch, label);
       return key;
-    }));
+    };
+    const keys = names.map((name) => keyOf(estimateLabel(name), color(name), false));
+    if (spec.dashed_label) keys.push(keyOf(spec.dashed_label, colors['text-secondary'], true));
+    legend.replaceChildren(...keys);
     caption.append(spec.caption + ' ', legend);
     const canvas = document.createElement('canvas');
     canvas.className = 'plot';
@@ -341,7 +355,7 @@ function syncAdaptivePlots(a) {
       canvas, adaptive: true, log: !!spec.log,
       series: () => spec.fields.map((f) => ({
         col: FIELDS.length + a.fields.indexOf(f), color: color(f),
-        dash: f.endsWith('_true') ? [5, 4] : null,
+        dash: f.endsWith('_true') || f in dashed ? [5, 4] : null,
       })),
       refs: () => [...refs.values()],
     };

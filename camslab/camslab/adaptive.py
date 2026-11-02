@@ -12,7 +12,8 @@ from .types import Params
 FIELDS = ("r", "c_x", "c_y")
 COLUMNS = tuple(f + "_hat" for f in FIELDS) + tuple(f + "_true" for f in FIELDS)
 # The web UI plot of the sample columns, see camslab_webui.server.adaptive_config().
-PLOTS = [{"caption": "Estimates, dashed: true values", "fields": list(COLUMNS), "log": False}]
+PLOTS = [{"caption": "Circle estimates", "fields": list(COLUMNS), "log": False,
+          "dashed_label": "true value"}]
 
 
 def filter_matrices(lam: float, n: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:

@@ -27,12 +27,14 @@ In Gazebo, set `adaptive: fiducial` in `camslab/config/sim.yaml` or pass
 `adaptive:=fiducial`. RViz shows the true markers and camera in grey and the estimates in
 green, with the four errors of the paper's Fig. 1 as text above the car. The web UI plots
 those four errors, `||x~||`, `||t~_X||`, `max_j ||m~_j||` and `max_j ||t~_j||`, on a log
-axis as in Fig. 1, and draws the marker estimates on the map. The camera transform
-accuracy is the pair of camera curves; the plot goes to zero without noise. A second
-plot shows the excitation: `lambda_min(G_x)` and `lambda_min(G_t)` of eqs. (11) and (19)
-against the gates `alpha_x` and `alpha_t`. The camera laws switch on where a curve crosses
-its dashed line, and the tooltip counts the stored rotation pairs, translation pairs and
-height observations.
+axis as in Fig. 1, camera and markers in two panels, and draws the marker estimates on the
+map. The Python simulator adds the paper's measurement noise, so the errors settle to a
+noise floor; the dashed curves are the 99.73 % covariance radii of Section VI,
+`Estimator.covariance()`, predicted from the stored regressions, and a third panel shows
+the noise drawn at each sample. The camera panel's tooltip reports the excitation,
+`lambda_min(G_x)` and `lambda_min(G_t)` of eqs. (11) and (19) against the gates `alpha_x`
+and `alpha_t`, and counts the stored rotation pairs, translation pairs and height
+observations; the camera laws switch on once a `lambda_min` passes its gate.
 
 ## Frames and notation
 
@@ -142,7 +144,7 @@ Tests: `test_study_converges_without_noise` (every error below 1e-6 after the pa
 - `Estimator.ingest()`: pair selection. Every `d_step` of travel, each visible marker is
   paired with its earlier observations over the last `l_buffer` of travel: the farthest
   partner with a relative rotation below `straight_tol` gives a pure-translation pair,
-  and the partner with the largest rotation above `psi_min` gives a rotation pair and a
+  and the partner with the largest rotation between `psi_min` and `psi_max` gives a rotation pair and a
   translation tuple. Known heights are stored at the same time.
 - `Estimator.make_tick()`: the information matrices, the readiness gates and the current
   observations, held constant over one tick.

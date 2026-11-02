@@ -13,6 +13,7 @@ from camslab_webui.server import (Backend, adaptive_config, hello_msg, history_m
                                   status_msg)
 
 from .simulate import ESTIMATORS, make_observer, simulate_steps
+from camslab.fiducial import Noise
 from camslab.trajectory import check_limits, make_shape, reference, sample_path
 from camslab.types import SHAPES, Params, State
 
@@ -24,7 +25,8 @@ RANDOM_TRIES = 50
 class SimBackend(Backend):
     def __init__(self, params: Params, initial, dt, t_max, adaptive="", seed=None):
         """initial is {x, y, theta} or None for the start of the path. seed seeds the
-        random camera and markers of the fiducial estimator, a new draw every run."""
+        random camera and markers of the fiducial estimator and the paper's measurement
+        noise on what it receives, a new draw every run."""
         self.server = None
         self.params = params
         self.rng = np.random.default_rng(seed)
@@ -162,7 +164,7 @@ class SimBackend(Backend):
             except NotImplementedError:
                 pass
             initial = State.from_pose(**self.initial)
-            observer = make_observer(self.adaptive, self.params, self.rng)
+            observer = make_observer(self.adaptive, self.params, self.rng, Noise())
             await asyncio.get_running_loop().run_in_executor(None, self._drive, initial, observer)
         except (NotImplementedError, ValueError) as exc:
             self.status = status_msg("error", str(exc))

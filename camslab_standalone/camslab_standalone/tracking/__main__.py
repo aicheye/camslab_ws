@@ -10,6 +10,7 @@ from camslab_webui.server import SAMPLE_FIELDS, UiServer
 
 from .backend import SimBackend
 from .simulate import ESTIMATORS, estimate_fields, make_observer, simulate
+from camslab.fiducial import Noise
 from camslab.types import SHAPES, Params, State
 
 
@@ -49,7 +50,7 @@ def main():
 
     if args.csv:
         backend = SimBackend(params, initial, args.dt, args.t_max, args.adaptive, args.seed)
-        observer = make_observer(args.adaptive, params, backend.rng)
+        observer = make_observer(args.adaptive, params, backend.rng, Noise())
         samples = simulate(State.from_pose(**backend.initial), params, args.dt, args.t_max,
                            observer)
         fields = SAMPLE_FIELDS + estimate_fields(observer)

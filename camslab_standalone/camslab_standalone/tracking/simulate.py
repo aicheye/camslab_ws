@@ -7,6 +7,8 @@ from camslab import adaptive, fiducial
 
 from camslab.controller import control
 from ..common.unicycle import clamp, step
+from ..fiducial.noise import NOISE_FIELDS, noisy_heights, noisy_measurements
+from camslab.fiducial import Noise
 from camslab.trajectory import make_shape, reference
 from camslab.types import Params, State
 
@@ -30,34 +32,52 @@ class PathObserver:
 
 class FiducialObserver:
     """camslab.fiducial: the camera extrinsic and the marker poses, from the robot pose
-    and the markers the camera sees."""
+    and the markers the camera sees. With a Noise the estimator receives the robot pose,
+    the observations and the known heights with that measurement noise, drawn from rng,
+    and predicts its covariance for it; the controller still tracks the true state."""
 
-    def __init__(self, scene: fiducial.Scene | None = None, **estimator_kwargs):
+    def __init__(self, scene: fiducial.Scene | None = None, noise: Noise | None = None,
+                 rng=None, **estimator_kwargs):
         self.scene = fiducial.Scene() if scene is None else scene
-        self.estimator = fiducial.Estimator(self.scene.n, self.scene.known_heights(),
+        self.noise = noise
+        self.rng = np.random.default_rng() if rng is None else rng
+        heights = self.scene.known_heights()
+        if noise is not None:
+            heights = noisy_heights(heights, noise, self.rng)
+        self.estimator = fiducial.Estimator(self.scene.n, heights, noise=noise,
                                             **estimator_kwargs)
         self.truth = self.scene.truth()
-        self.fields = list(fiducial.columns(self.scene.n))
-        self.plots = fiducial.plots(self.estimator)
+        # The estimator's columns, then the noise drawn at each sample.
+        self.fields = list(fiducial.columns(self.scene.n)) + list(NOISE_FIELDS)
+        self.plots = fiducial.plots(self.estimator) + [
+            {"caption": "Measurement noise per sample",
+             "fields": list(NOISE_FIELDS), "log": True}]
 
     def observe(self, state: State, dt: float) -> list:
         T_R = fiducial.robot_pose(state)
-        self.estimator.update(T_R, self.scene.observe(T_R), dt)
+        observations = self.scene.observe(T_R)
+        drawn = [math.nan] * len(NOISE_FIELDS)
+        if self.noise is not None:
+            T_R, observations, drawn = noisy_measurements(T_R, observations, self.noise,
+                                                          self.rng)
+        self.estimator.update(T_R, observations, dt)
         estimate = self.estimator.estimate()
         return [*estimate, *self.truth, *fiducial.errors(estimate, self.truth, self.scene.n),
-                *self.estimator.excitation()]
+                *self.estimator.excitation(), *self.estimator.radii(), *drawn]
 
 
-def make_observer(kind: str, params: Params, rng=None):
+def make_observer(kind: str, params: Params, rng=None, noise: Noise | None = None):
     """An observer for `kind` ("path" or "fiducial"), or None for "" and None. With an
     rng the fiducial observer gets a random camera and random markers from
-    fiducial.random_scene(); without one, the fixed lab scene."""
+    fiducial.random_scene(); without one, the fixed lab scene. noise is added to what
+    the fiducial observer measures."""
     if not kind:
         return None
     if kind == "path":
         return PathObserver(params)
     if kind == "fiducial":
-        return FiducialObserver(None if rng is None else fiducial.random_scene(rng))
+        return FiducialObserver(None if rng is None else fiducial.random_scene(rng),
+                                noise=noise, rng=rng)
     raise ValueError(f"estimator must be one of {ESTIMATORS}, got {kind!r}")
 
 

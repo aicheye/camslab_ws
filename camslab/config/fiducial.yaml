@@ -22,6 +22,7 @@
     alpha_x: 0.05         # enable (14) once lambda_min(G_x) >= alpha_x
     alpha_t: 0.05         # enable (21) once lambda_min(G_t) >= alpha_t
     psi_min: 0.5236       # relative rotation of a rotation pair, at least [rad]
+    psi_max: 2.618        # and at most, away from the Cayley singularity at pi [rad]
     straight_tol: 0.0005  # relative rotation of a pure-translation pair, at most [rad]
     d_min: 0.2            # displacement of a pure-translation pair, at least [m]
     d_step: 0.1           # robot travel between pair attempts [m]
