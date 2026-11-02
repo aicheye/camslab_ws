@@ -6,7 +6,7 @@ import pytest
 from scipy.spatial.transform import Rotation
 
 from camslab.aruco import (OPTICAL_TO_BODY, PoseHistory, log_rotation, marker_corners,
-                           marker_pose, rodrigues)
+                           marker_pose, nominal_intrinsics, rodrigues)
 from camslab.fiducial import Scene, inverse, pose, robot_pose, rotation_angle
 from camslab.types import State
 
@@ -57,3 +57,9 @@ def test_pose_history_interpolates_between_samples():
     assert history.at(0.2) is None and history.at(-0.1) is None
     history.push(1.5, robot_pose(State.from_pose(1.0, 0.0, 0.0)))
     assert history.at(0.05) is None            # older than the horizon, dropped
+
+
+def test_nominal_intrinsics_span_the_field_of_view():
+    K = nominal_intrinsics(640, 480, 90.0)
+    assert K[0, 2] == 320.0 and K[1, 2] == 240.0 and K[0, 0] == K[1, 1]
+    assert K[0, 0] == pytest.approx(320.0)          # 90 degrees: f = half width

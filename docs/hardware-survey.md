@@ -40,7 +40,8 @@ Docker container, reached as in the vision guide:
 Install the camera driver and the OpenCV bindings inside the container:
 
     apt update
-    apt install ros-humble-usb-cam ros-humble-cv-bridge ros-humble-vrpn-mocap python3-opencv
+    apt install ros-humble-usb-cam ros-humble-cv-bridge ros-humble-vrpn-mocap \
+        ros-humble-camera-calibration python3-opencv
 
 Clone this repository into a workspace and build the two Python packages:
 
@@ -66,6 +67,17 @@ tool writes a tarball with `ost.yaml`; copy it to `~/.ros/camera_info/camera.yam
 set `camera_info_url` in `config/survey.yaml` to that file. Without it the marker poses are
 wrong by the unknown focal length and the estimator cannot converge.
 
+### Skipping the calibration
+
+To run the chain before a calibration exists, leave `camera_info_url` empty and set
+`nominal_fov` in `config/survey.yaml` to the camera's horizontal field of view in degrees
+(60 for a typical webcam). The `aruco` node then builds the camera matrix from the image
+size and that angle, with no distortion, and warns once at startup. Detection and the
+marker directions are fine; every marker distance is scaled by the ratio of the true focal
+length to the nominal one, so the estimated camera position and marker positions carry the
+same scale error. Set `nominal_fov: 0` once the calibration file is in place so a missing
+file is reported instead of guessed.
+
 ## Settings
 
 `camslab/config/survey.yaml` holds the lab values. Set:
@@ -75,6 +87,7 @@ wrong by the unknown focal length and the estimator cannot converge.
 | `name`, `tracker`, `mocap_server` | the car's namespace, its rigid body name and the motion capture server, as in {doc}`configuration` |
 | `video_device`, `image_width`, `image_height`, `framerate`, `pixel_format` | the camera, as `v4l2-ctl --list-formats-ext` reports it |
 | `camera_info_url` | the calibration file |
+| `nominal_fov` | horizontal field of view [deg] used while there is no calibration file; 0 requires the file |
 | `camera_delay` | image latency [s]; the robot pose is taken this long before the image stamp |
 | `dictionary`, `marker_size`, `marker_ids` | the printed markers |
 | `marker_height`, `marker_height_known` | the centre heights above the floor and which of them the estimator may use |

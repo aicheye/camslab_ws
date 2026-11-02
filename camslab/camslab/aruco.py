@@ -52,6 +52,14 @@ def marker_corners(size: float) -> np.ndarray:
     return np.array([[-h, h, 0.0], [h, h, 0.0], [h, -h, 0.0], [-h, -h, 0.0]])
 
 
+def nominal_intrinsics(width: int, height: int, horizontal_fov_deg: float) -> np.ndarray:
+    """A camera matrix for an uncalibrated camera: the focal length from the image width
+    and a nominal horizontal field of view, the principal point at the image centre. The
+    marker distances then carry the focal-length error until the camera is calibrated."""
+    f = (width / 2.0) / math.tan(math.radians(horizontal_fov_deg) / 2.0)
+    return np.array([[f, 0.0, width / 2.0], [0.0, f, height / 2.0], [0.0, 0.0, 1.0]])
+
+
 class Detector:
     """ArUco detection and pose estimation with OpenCV, both the 4.7+ ArucoDetector API
     and the older module functions. `dictionary` is a cv2.aruco name such as

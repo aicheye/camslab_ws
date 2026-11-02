@@ -3,6 +3,7 @@ the observations C_T_Mj of the fiducial estimator, as a tf2_msgs/TFMessage on
 `observations` (one transform per visible marker, stamped with the image time) and on
 /tf for RViz. Subscribes `image_raw` and `camera_info` of the usb_cam node."""
 
+import numpy as np
 import rclpy
 from geometry_msgs.msg import TransformStamped
 from rclpy.node import Node
@@ -11,7 +12,7 @@ from sensor_msgs.msg import CameraInfo, Image
 from tf2_msgs.msg import TFMessage
 from tf2_ros import TransformBroadcaster
 
-from .aruco import Detector
+from .aruco import Detector, nominal_intrinsics
 from .estimator_node import quaternion_of
 
 
@@ -23,6 +24,9 @@ class ArucoNode(Node):
         self.camera_frame = self.declare_parameter("camera_frame", "camera").value
         self.prefix = self.declare_parameter("marker_prefix", "marker_").value
         self.debug = bool(self.declare_parameter("debug_image", False).value)
+        # Used when camera_info carries no calibration (k all zero); 0 requires one.
+        self.nominal_fov = float(self.declare_parameter("nominal_fov", 0.0).value)
+        self.warned_nominal = False
         self.detector = Detector(dictionary, marker_size)
         from cv_bridge import CvBridge
 
@@ -35,7 +39,22 @@ class ArucoNode(Node):
         self.get_logger().info(f"{dictionary}, markers of {marker_size} m")
 
     def on_info(self, msg):
-        self.detector.set_intrinsics(msg.k, msg.d)
+        if any(msg.k):
+            self.detector.set_intrinsics(msg.k, msg.d)
+            return
+        if self.nominal_fov <= 0.0:
+            if not self.warned_nominal:
+                self.get_logger().error("camera_info has no calibration; set camera_info_url "
+                                        "or nominal_fov (docs/hardware-survey.md)")
+                self.warned_nominal = True
+            return
+        if not self.warned_nominal:
+            self.get_logger().warning(f"camera not calibrated: nominal intrinsics for a "
+                                      f"{self.nominal_fov:.0f} degree field of view, marker "
+                                      "distances are scaled by the focal-length error")
+            self.warned_nominal = True
+        self.detector.set_intrinsics(nominal_intrinsics(msg.width, msg.height, self.nominal_fov),
+                                     np.zeros(5))
 
     def on_image(self, msg):
         image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
