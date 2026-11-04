@@ -11,15 +11,16 @@ mocap_server: 129.97.71.49
 mocap_port: 3883
 tracker: ""                      # rigid body name in the mocap software; empty for `name`
 
-# Camera, through usb_cam. Calibrate it first (docs/hardware-survey.md) and point
-# camera_info_url at the calibration file; without one the marker poses are wrong.
+# Camera, through usb_cam. `camera` names a calibration in config/cameras/ (written by
+# `ros2 run camslab calibrate`, docs/hardware-survey.md) or is a path to one; its
+# image size must match image_width and image_height.
 video_device: /dev/video0
 image_width: 640
 image_height: 480
 framerate: 30.0
 pixel_format: yuyv
-camera_info_url: ""              # file:///home/jetson/.ros/camera_info/camera.yaml
-nominal_fov: 60.0                # without a calibration file: horizontal field of view [deg]; 0 requires the file
+camera: ""                       # e.g. yahboom_r2_640x480; empty: no calibration, see nominal_fov
+nominal_fov: 60.0                # without a calibration: horizontal field of view [deg]; 0 requires one
 camera_delay: 0.05               # image latency: the pose is taken this long before the stamp [s]
 
 # Markers: cv2.aruco dictionary, printed side [m], the ids in the lab, and the height of

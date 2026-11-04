@@ -38,6 +38,7 @@ setup(
             "pose_tf = camslab.pose_tf:main",
             "estimator = camslab.estimator_node:main",
             "aruco = camslab.aruco_node:main",
+            "calibrate = camslab.calibration:main",
         ],
     },
 )

@@ -44,7 +44,7 @@ class ArucoNode(Node):
             return
         if self.nominal_fov <= 0.0:
             if not self.warned_nominal:
-                self.get_logger().error("camera_info has no calibration; set camera_info_url "
+                self.get_logger().error("camera_info has no calibration; set `camera` "
                                         "or nominal_fov (docs/hardware-survey.md)")
                 self.warned_nominal = True
             return

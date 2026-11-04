@@ -43,6 +43,32 @@ def rviz_config(share, name):
     return out.name
 
 
+def camera_info_url(settings):
+    """file:// URL of the `camera` calibration: a name in config/cameras/ (the source tree
+    first, as camslab_settings.default_polytope_file, then the installed share) or a path.
+    Empty when `camera` is empty."""
+    camera = str(settings.get("camera") or "")
+    if not camera:
+        return ""
+    if os.sep in camera or camera.endswith(".yaml"):
+        path = os.path.expanduser(camera)
+    else:
+        source = os.path.dirname(camslab_settings.default_polytope_file(__file__))
+        installed = os.path.join(get_package_share_directory("camslab"), "config")
+        candidates = [os.path.join(d, "cameras", f"{camera}.yaml") for d in (source, installed)]
+        path = next((c for c in candidates if os.path.isfile(c)), candidates[0])
+    if not os.path.isfile(path):
+        raise RuntimeError(f"no camera calibration {path}; run `ros2 run camslab calibrate` "
+                           "(docs/hardware-survey.md)")
+    with open(path) as f:
+        calibration = yaml.safe_load(f)
+    size = (int(calibration["image_width"]), int(calibration["image_height"]))
+    if size != (int(settings["image_width"]), int(settings["image_height"])):
+        raise RuntimeError(f"{path} is for {size[0]} x {size[1]} images, the camera is set to "
+                           f"{settings['image_width']} x {settings['image_height']}")
+    return "file://" + os.path.abspath(path)
+
+
 def survey(context):
     share = get_package_share_directory("camslab")
     settings = camslab_settings.load(context)
@@ -71,7 +97,7 @@ def survey(context):
                           "framerate": float(settings["framerate"]),
                           "pixel_format": str(settings["pixel_format"]),
                           "camera_name": "camera", "frame_id": camera_frame,
-                          "camera_info_url": str(settings["camera_info_url"] or "")}]),
+                          "camera_info_url": camera_info_url(settings)}]),
         Node(package="camslab", executable="aruco", namespace=name, output="screen",
              parameters=[{"marker_size": float(settings["marker_size"]),
                           "dictionary": str(settings["dictionary"]),
