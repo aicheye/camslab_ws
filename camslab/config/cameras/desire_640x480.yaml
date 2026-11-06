@@ -1,0 +1,22 @@
+# desire_640x480: calibration of 2026-11-06 with the 6 x 6 DICT_APRILTAG_36h11 board, 29 views, reprojection error 0.696 px.
+# Written by `ros2 run camslab car calibrate` (docs/hardware-survey.md).
+image_width: 640
+image_height: 480
+camera_name: camera
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [539.41857, 0, 329.02844, 0, 539.61345, 237.03081, 0, 0, 1]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.076501263, -0.24357736, 0.0012876756, 0.0072497608, 0.14975926]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [539.41857, 0, 329.02844, 0, 0, 539.61345, 237.03081, 0, 0, 0, 1, 0]

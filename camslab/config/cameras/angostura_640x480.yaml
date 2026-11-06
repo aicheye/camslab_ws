@@ -1,0 +1,22 @@
+# angostura_640x480: calibration of 2026-11-05 with the 6 x 6 DICT_APRILTAG_36h11 board, 68 views, reprojection error 0.355 px.
+# Written by `ros2 run camslab car calibrate` (docs/hardware-survey.md).
+image_width: 640
+image_height: 480
+camera_name: camera
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [523.24259, 0, 323.21198, 0, 524.42779, 250.48292, 0, 0, 1]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.084719047, -0.26128017, 0.0062464211, -0.0006945306, 0.19100104]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [523.24259, 0, 323.21198, 0, 0, 524.42779, 250.48292, 0, 0, 0, 1, 0]

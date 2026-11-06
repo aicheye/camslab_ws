@@ -1,0 +1,22 @@
+# estranged_640x480: calibration of 2026-11-06 with the 6 x 6 DICT_APRILTAG_36h11 board, 67 views, reprojection error 0.336 px.
+# Written by `ros2 run camslab car calibrate` (docs/hardware-survey.md).
+image_width: 640
+image_height: 480
+camera_name: camera
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [535.53567, 0, 320.1766, 0, 535.86334, 236.65601, 0, 0, 1]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.11050879, -0.27869955, 0.00041275018, -0.00071785231, 0.15081524]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [535.53567, 0, 320.1766, 0, 0, 535.86334, 236.65601, 0, 0, 0, 1, 0]
