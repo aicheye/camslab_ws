@@ -9,6 +9,7 @@ client, the estimator, RViz and the web UI run here (docs/hardware-survey.md).
     ros2 run camslab car clock                        set the car's clock from this computer, once
     ros2 run camslab car chrony                       keep it there: chrony on the car against this computer
     ros2 run camslab car install ros-humble-aruco-msgs   a ROS package onto the car through this computer
+    ros2 run camslab car install --fetch-only ...     download it to ~/.cache/camslab/debs while online
     ros2 run camslab car camera                       the camera node on the car, rates here
     ros2 run camslab car calibrate --name <model>_<w>x<h>
     ros2 run camslab car status [--show]              topic rates; --show: the preview
@@ -49,6 +50,9 @@ REMOTE_NODE = "/tmp/camslab_car_node.py"        # where the car keeps its copy
 CLOCK_OFFSET = 0.02                             # tolerated car clock offset [s]
 CHRONY_MARK = "# camslab: serve time to the lab cars (ros2 run camslab car chrony)"
 ROS_APT = "http://packages.ros.org/ros2/ubuntu"     # where the cars' ROS packages come from
+DEB_CACHE = os.path.expanduser("~/.cache/camslab/debs")
+UBUNTU_OF = {"foxy": "focal", "galactic": "focal", "humble": "jammy", "iron": "jammy",
+             "jazzy": "noble", "kilted": "noble"}
 
 
 # --- settings and the remote commands -------------------------------------------------------
@@ -705,7 +709,14 @@ def ros_deb_url(package: str, codename: str, arch: str) -> str:
     and `arch`, from the repository's package index. A RuntimeError when it is not there."""
     index = f"{ROS_APT}/dists/{codename}/main/binary-{arch}/Packages.gz"
     with urllib.request.urlopen(index, timeout=30) as response:
-        text = gzip.decompress(response.read()).decode(errors="replace")
+        data = response.read()
+    try:
+        text = gzip.decompress(data).decode(errors="replace")
+    except gzip.BadGzipFile:
+        raise RuntimeError(f"{index} did not answer with the package index but with "
+                           f"{data[:40]!r}: this computer has no internet here (a captive "
+                           "portal?); fetch the package on a network that has, with "
+                           "`car install --fetch-only`, and install it from the lab")
     for stanza in text.split("\n\n"):
         if f"Package: {package}\n" in stanza + "\n":
             for line in stanza.splitlines():
@@ -722,19 +733,43 @@ def car_platform(settings: dict):
     return (parts[0], parts[1]) if code == 0 and len(parts) == 2 else None
 
 
+def cached_deb(package: str, arch: str):
+    """The newest `<package>_<version>_<arch>.deb` in DEB_CACHE, or None."""
+    if not os.path.isdir(DEB_CACHE):
+        return None
+    names = sorted(n for n in os.listdir(DEB_CACHE)
+                   if n.startswith(f"{package}_") and n.endswith(f"_{arch}.deb"))
+    return os.path.join(DEB_CACHE, names[-1]) if names else None
+
+
+def fetch_deb(package: str, codename: str, arch: str) -> str:
+    """Downloads `package`'s .deb into DEB_CACHE and returns its path. The lab network
+    has no internet, so this runs where there is some and the file waits in the cache."""
+    url = ros_deb_url(package, codename, arch)
+    path = os.path.join(DEB_CACHE, url.rpartition("/")[2])
+    os.makedirs(DEB_CACHE, exist_ok=True)
+    with urllib.request.urlopen(url, timeout=120) as response:
+        data = response.read()
+    if not data.startswith(b"!<arch>"):
+        raise RuntimeError(f"{url} did not answer with a .deb (no internet here?)")
+    with open(path, "wb") as f:
+        f.write(data)
+    return path
+
+
 def install_ros_deb(settings: dict, package: str) -> str:
-    """Installs a ROS package on the car when the car has no internet: the .deb is
-    downloaded here and sent through ssh into the car's ROS environment, where dpkg
-    installs it (its dependencies must be there already, as a message package's are).
-    Returns the deb's name; a RuntimeError says what failed."""
+    """Installs a ROS package on the car when the car has no internet: the .deb from
+    DEB_CACHE, or downloaded now, is sent through ssh into the car's ROS environment,
+    where dpkg installs it (its dependencies must be there already, as a message
+    package's are). Returns the deb's name; a RuntimeError says what failed."""
     host = str(settings["camera_host"])
     platform = car_platform(settings)
     if platform is None:
         raise RuntimeError("could not read the car's Ubuntu release and architecture")
-    url = ros_deb_url(package, *platform)
-    name = url.rpartition("/")[2]
-    with urllib.request.urlopen(url, timeout=120) as response:
-        deb = response.read()
+    path = cached_deb(package, platform[1]) or fetch_deb(package, *platform)
+    name = os.path.basename(path)
+    with open(path, "rb") as f:
+        deb = f.read()
     staged = f"/tmp/{name}"
     sudo = "" if settings.get("container") else "sudo -n "
     command = remote_shell(settings, f"cat > {staged} && {sudo}dpkg -i {staged}", stdin=True)
@@ -747,7 +782,18 @@ def install_ros_deb(settings: dict, package: str) -> str:
 
 
 def cmd_install(settings: dict, args) -> int:
-    """`car install <package>`: a ROS package onto the car through this computer."""
+    """`car install <package>`: a ROS package onto the car through this computer; with
+    --fetch-only, download it into the cache for later, with no car in reach."""
+    if args.fetch_only:
+        codename = UBUNTU_OF.get(str(settings.get("ros_distro") or "humble"), "jammy")
+        for package in args.packages:
+            try:
+                path = fetch_deb(package, codename, args.arch)
+            except (RuntimeError, OSError) as e:
+                print(f"{package}: {e}")
+                return 1
+            print(f"{package}: {path}")
+        return 0
     if not check_ssh(settings):
         return 1
     for package in args.packages:
@@ -1112,6 +1158,9 @@ def main(argv=None) -> int:
     sub.add_parser("clock", help="set the car's clock to this computer's, once")
     install = sub.add_parser("install", help="install ROS packages on the car through this computer")
     install.add_argument("packages", nargs="+", help="e.g. ros-humble-aruco-msgs")
+    install.add_argument("--fetch-only", action="store_true",
+                         help="only download into ~/.cache/camslab/debs, for a later install")
+    install.add_argument("--arch", default="arm64", help="the car's architecture for --fetch-only")
     chrony = sub.add_parser("chrony", help="keep the car's clock on this computer's with chrony")
     chrony.add_argument("--timesyncd", action="store_true",
                         help="use systemd-timesyncd on the car even if chrony could be installed")
