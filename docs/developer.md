@@ -7,9 +7,11 @@ Use this page for package layout, simulation internals, and ROS interfaces. Star
 
 | Package or directory | Purpose |
 |---|---|
-| `camslab/` | Python ROS 2 package: the shared library (`types`, `trajectory`, `controller`, `safety`, `adaptive`), the nodes `controller`, `pose_tf` and `estimator`, launch files, Gazebo model, and RViz config |
+| `camslab/` | Python ROS 2 package: the shared library (`types`, `trajectory`, `controller`, `safety`, `adaptive`, `fiducial`, `aruco`), the nodes `controller`, `pose_tf`, `estimator`, `car_node` and `observation_markers`, the `car` and `calibrate` tools, launch files, Gazebo model, RViz config and the camera calibrations in `config/cameras/` |
 | `camslab_webui/` | shared web UI backend, frontend, and safety-polytope logic |
 | `camslab_standalone/` | standalone Python experiments, no ROS, one subpackage each, with shared code in `common/` |
+| `hardware/` | printable parts for the lab: `marker_mounts/` has the fiducial stands (STL, `mounts.py`) and the markers to glue on them (`markers.pdf`, `markers.py`) |
+| `docker/` | the ROS 2 Humble image with the lab drivers, see {doc}`install` |
 | `docs/` | user and developer documentation |
 
 `camslab_standalone/` contains `COLCON_IGNORE` and is not built by colcon. It is a uv project
@@ -125,7 +127,7 @@ A camera with unknown extrinsic `X = R_T_C` is mounted on the robot, and fiducia
 with unknown world poses `Y_j = W_T_Mj` stand in the lab. The robot pose is known. The
 camera is simulated as a pose sensor: `Scene.observe()` returns the relative pose `C_T_Mj`
 of every marker inside the field of view, without any image. The estimator is written
-step by step in {doc}`fiducial-hints` (`docs/fiducial-hints.md`).
+step by step in `docs/fiducial-hints.md` (kept out of the site, like the other hint pages).
 
 | Name | Purpose |
 |---|---|
@@ -169,8 +171,8 @@ determine a parameter.
 On a real car the sensor is `camslab/camslab/car_node.py`, a self-contained node that
 `camslab.car` uploads to the car and runs there over ssh: it reads the camera with OpenCV,
 detects the ArUco markers and publishes each marker pose as a transform `marker_<id>` in
-the camera frame on `observations`, plus a low-rate JPEG preview (`camslab.aruco_node` is
-the same detector on an `image_raw` topic). The estimator node with `sensor: aruco` pairs those with
+the camera frame on `observations`, plus a low-rate JPEG preview. The estimator node with
+`sensor: aruco` pairs those with
 the motion capture pose interpolated to the image time (`camslab.aruco.PoseHistory`) and
 publishes NaN for the errors, since the truth is unknown; the covariance radii are the
 accuracy measure. `survey.launch.py` with `config/survey.yaml` starts the whole chain, see

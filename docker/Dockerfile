@@ -19,7 +19,7 @@ RUN apt-get update \
 # its CMake build expects vcpkg, so it is built against Ubuntu's ffmpeg and opus, with an
 # OpusConfig.cmake that finds opus through pkg-config (libopus-dev has none).
 # pip is upgraded first because the Ubuntu 22.04 pip cannot run its build backend.
-# numpy stays below 2 for the Humble packages built against numpy 1 (cv_bridge).
+# numpy stays below 2 for the Humble packages built against numpy 1 (python3-opencv).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git python3-pip cmake g++ pkg-config \
         libavcodec-dev libavutil-dev libswscale-dev libopus-dev \

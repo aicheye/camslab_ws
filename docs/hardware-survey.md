@@ -1,6 +1,6 @@
 # Fiducial surveying on a real car
 
-This page adapts the fiducial surveying estimator of {doc}`fiducial-hints` to a real car:
+This page adapts the fiducial surveying estimator (`docs/fiducial-hints.md`) to a real car:
 a USB camera on the car, ArUco markers in the lab, and the motion capture for the robot
 pose. It follows the Yahboom ROSMASTER R2 vision guide (Daniel Xie, June 2026) for the
 robot side and replaces its ArUco detector and follower with the surveying pipeline:
@@ -212,7 +212,7 @@ This uploads and starts the camera node on the car over ssh (with the intrinsics
 `sensor: aruco`, RViz with the preview image and the web UI on <http://127.0.0.1:8000>. Drive the car with the teleop of its driver or with
 {doc}`running`'s controller on a path with straight stretches (gerono, or a bowtie at
 least 2 m wide): the camera orientation needs both pure translations and turns, see
-{doc}`fiducial-hints`.
+`docs/fiducial-hints.md`.
 
 Watch the chain in a second terminal:
 
@@ -257,6 +257,4 @@ OpenCV's optical frame has z forward, x right and y down. The estimator's camera
 x forward and z up like the robot frame, so the camera node rotates every observation by
 `OPTICAL_TO_BODY` before it is published (the same constant as `camslab.aruco`, which the
 tests keep equal); the extrinsic `X` is estimated for that frame. The marker frame is
-OpenCV's: x and y in the marker plane, z out of it. `camslab.aruco_node` is the same
-detector as a subscriber to an `image_raw` topic, for a recorded image stream or a camera
-driver that already runs.
+OpenCV's: x and y in the marker plane, z out of it.

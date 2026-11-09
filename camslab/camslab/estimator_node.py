@@ -3,8 +3,9 @@
 `estimator` selects camslab.adaptive ("path": the circle that fits the path) or
 camslab.fiducial ("fiducial": the camera extrinsic and the marker poses). The fiducial
 estimator's `sensor` is "simulated" (the camera and markers of config/fiducial.yaml,
-observed from the robot pose) or "aruco" (the marker poses published by aruco_node on
-`observations`, with the robot pose interpolated to the image time; the truth is unknown,
+observed from the robot pose) or "aruco" (the marker poses published by the car's camera
+node, car_node.py, on `observations`, with the robot pose interpolated to the image time;
+the truth is unknown,
 so the error columns are NaN and the covariance radii are the accuracy measure).
 """
 

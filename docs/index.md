@@ -14,6 +14,7 @@ Choose **host install** on Ubuntu 22.04 with ROS 2 already installed. Choose
 | Start the simulator after installation | {doc}`running` |
 | Change a path or draw one | {doc}`paths` |
 | Configure trajectories and robots | {doc}`configuration` |
+| Survey fiducials with a camera on a car | {doc}`hardware-survey` |
 | Read ROS and package details | {doc}`developer` |
 | Fix a launch problem | {doc}`troubleshooting` |
 

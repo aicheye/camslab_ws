@@ -37,7 +37,6 @@ setup(
             "controller = camslab.controller_node:main",
             "pose_tf = camslab.pose_tf:main",
             "estimator = camslab.estimator_node:main",
-            "aruco = camslab.aruco_node:main",
             "car_node = camslab.car_node:main",
             "observation_markers = camslab.observation_markers:main",
             "calibrate = camslab.calibration:main",

@@ -228,29 +228,7 @@ class Screen:
         self.drawn = 0
 
 
-# --- images without cv_bridge -----------------------------------------------------------------
-
-def decode_image(msg) -> np.ndarray:
-    """A BGR (or grey) array from a sensor_msgs/Image of the encodings usb_cam publishes."""
-    import cv2
-
-    data = np.frombuffer(msg.data, np.uint8)
-    encoding = msg.encoding.lower()
-    if encoding in ("bgr8", "rgb8"):
-        image = data.reshape(msg.height, msg.step // 3, 3)[:, :msg.width]
-        return image if encoding == "bgr8" else cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-    if encoding in ("mono8", "8uc1"):
-        return data.reshape(msg.height, msg.step)[:, :msg.width]
-    if encoding in ("yuv422_yuy2", "yuyv"):
-        return cv2.cvtColor(data.reshape(msg.height, msg.step // 2, 2)[:, :msg.width],
-                            cv2.COLOR_YUV2BGR_YUY2)
-    if encoding in ("yuv422", "uyvy"):
-        return cv2.cvtColor(data.reshape(msg.height, msg.step // 2, 2)[:, :msg.width],
-                            cv2.COLOR_YUV2BGR_UYVY)
-    from cv_bridge import CvBridge
-
-    return CvBridge().imgmsg_to_cv2(msg, desired_encoding="bgr8")
-
+# --- images -----------------------------------------------------------------------------------
 
 def decode_compressed(msg) -> np.ndarray:
     import cv2

@@ -644,7 +644,7 @@ def frames_from_device(device: str, width: int, height: int):
     capture.set(cv2.CAP_PROP_FRAME_WIDTH, width)
     capture.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
     if not capture.isOpened():
-        sys.exit(f"cannot open {device}; is usb_cam still running?")
+        sys.exit(f"cannot open {device}; is another camera node still running?")
     try:
         while True:
             ok, frame = capture.read()

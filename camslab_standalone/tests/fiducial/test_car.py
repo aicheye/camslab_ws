@@ -137,26 +137,18 @@ def test_screen_rewrites_in_place_only_on_a_terminal(monkeypatch):
     assert out.getvalue() == "a\nb\nc\n"                  # a pipe: plain lines
 
 
-def test_images_are_decoded_without_cv_bridge():
+def test_the_preview_is_decoded():
     cv2 = pytest.importorskip("cv2")
 
     class Msg:
-        def __init__(self, encoding, data, width, height, step):
-            self.encoding, self.data, self.width, self.height, self.step = (
-                encoding, data, width, height, step)
+        def __init__(self, data):
+            self.data = data
 
     bgr = np.zeros((4, 6, 3), np.uint8)
     bgr[..., 0] = 200                                     # blue
-    assert np.array_equal(car.decode_image(Msg("bgr8", bgr.tobytes(), 6, 4, 18)), bgr)
-    rgb = car.decode_image(Msg("rgb8", bgr[..., ::-1].tobytes(), 6, 4, 18))
-    assert np.array_equal(rgb, bgr)
-    yuyv = cv2.cvtColor(bgr, cv2.COLOR_BGR2YUV_YUY2) if hasattr(cv2, "COLOR_BGR2YUV_YUY2") else None
-    if yuyv is not None:
-        back = car.decode_image(Msg("yuv422_yuy2", yuyv.tobytes(), 6, 4, 12))
-        assert np.abs(back.astype(int) - bgr.astype(int)).max() < 8
     ok, jpeg = cv2.imencode(".jpg", bgr)
-    decoded = car.decode_compressed(Msg("jpeg", jpeg.tobytes(), 6, 4, 0))
-    assert decoded.shape == (4, 6, 3)
+    decoded = car.decode_compressed(Msg(jpeg.tobytes()))
+    assert decoded.shape == (4, 6, 3) and decoded[..., 0].mean() > 150
 
 
 def test_set_camera_setting_keeps_the_comment(tmp_path):
