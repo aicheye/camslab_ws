@@ -28,7 +28,7 @@
   <exec_depend>rviz2</exec_depend>
   <exec_depend>vrpn_mocap</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>tf2_msgs</exec_depend>
+  <exec_depend>aruco_msgs</exec_depend>
   <exec_depend>python3-opencv</exec_depend>
 
   <export>

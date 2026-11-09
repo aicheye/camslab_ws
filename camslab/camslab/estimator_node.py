@@ -20,7 +20,7 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from std_msgs.msg import ColorRGBA, Float64MultiArray, MultiArrayDimension
 from std_srvs.srv import Trigger
-from tf2_msgs.msg import TFMessage
+from aruco_msgs.msg import MarkerArray as ArucoMarkers
 from visualization_msgs.msg import Marker, MarkerArray
 
 from . import adaptive, fiducial
@@ -75,10 +75,10 @@ def pose_matrix(msg: PoseStamped) -> np.ndarray:
                          [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])
 
 
-def transform_matrix(tf) -> np.ndarray:
-    """A 4x4 pose from a geometry_msgs TransformStamped."""
-    t = tf.transform.translation
-    return fiducial.pose(rotation_of(tf.transform.rotation), [t.x, t.y, t.z])
+def marker_matrix(marker) -> np.ndarray:
+    """C_T_M from an aruco_msgs Marker."""
+    p = marker.pose.pose
+    return fiducial.pose(rotation_of(p.orientation), [p.position.x, p.position.y, p.position.z])
 
 
 def stamp_seconds(stamp) -> float:
@@ -144,7 +144,6 @@ class EstimatorNode(Node):
         self.sensor = str(self.param("sensor", "simulated"))
         self.frame = str(self.param("frame", "map"))
         self.camera_delay = float(self.param("camera_delay", 0.0))
-        self.marker_prefix = str(self.param("marker_prefix", "marker_"))
         self.path = {n: self.get_parameter(n).value for n in PATH_NAMES if self.has_parameter(n)}
 
         self.estimate_pub = self.create_publisher(Float64MultiArray, "estimate", 10)
@@ -154,7 +153,7 @@ class EstimatorNode(Node):
                                  10)
         self.create_service(Trigger, "~/reset", self.on_reset)
         if self.sensor == "aruco":
-            self.create_subscription(TFMessage, "observations", self.on_observations, 10)
+            self.create_subscription(ArucoMarkers, "observations", self.on_observations, 10)
 
         self.pose = None
         self.pose_time = None
@@ -258,20 +257,11 @@ class EstimatorNode(Node):
     def on_observations(self, msg):
         """One camera image: the markers of marker_ids seen in it, keyed by their index."""
         found = {}
-        stamp = None
-        for tf in msg.transforms:
-            name = tf.child_frame_id
-            if not name.startswith(self.marker_prefix):
-                continue
-            try:
-                marker_id = int(name[len(self.marker_prefix):])
-            except ValueError:
-                continue
-            if marker_id in self.marker_index:
-                found[self.marker_index[marker_id]] = transform_matrix(tf)
-                stamp = stamp_seconds(tf.header.stamp)
+        for marker in msg.markers:
+            if int(marker.id) in self.marker_index:
+                found[self.marker_index[int(marker.id)]] = marker_matrix(marker)
         if found:
-            self.pending = (stamp, found)
+            self.pending = (stamp_seconds(msg.header.stamp), found)
 
     def measurement(self):
         """(W_T_R, {j: C_T_Mj}) for the next update with the ArUco sensor: the robot pose

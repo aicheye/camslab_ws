@@ -254,7 +254,7 @@ class Watch:
         from geometry_msgs.msg import PoseStamped
         from sensor_msgs.msg import CameraInfo, CompressedImage
         from std_msgs.msg import Float64MultiArray
-        from tf2_msgs.msg import TFMessage
+        from aruco_msgs.msg import MarkerArray as ArucoMarkers
 
         rclpy.init()
         self.rclpy = rclpy
@@ -274,7 +274,7 @@ class Watch:
                 self.node.create_subscription(CompressedImage, f"{ns}/{topic}",
                                               self.on_compressed, qos)
         self.node.create_subscription(CameraInfo, f"{ns}/camera_info", self.on_info, qos)
-        self.node.create_subscription(TFMessage, f"{ns}/observations", self.on_observations, 10)
+        self.node.create_subscription(ArucoMarkers, f"{ns}/observations", self.on_observations, 10)
         self.node.create_subscription(PoseStamped, f"{ns}/pose", self.on_pose, qos)
         self.node.create_subscription(Float64MultiArray, f"{ns}/estimate", self.on_estimate, 10)
 
@@ -288,10 +288,9 @@ class Watch:
 
     def on_observations(self, msg):
         self.rates["observations"].tick()
-        self.markers = {tf.child_frame_id: math.sqrt(tf.transform.translation.x ** 2
-                                                     + tf.transform.translation.y ** 2
-                                                     + tf.transform.translation.z ** 2)
-                        for tf in msg.transforms}
+        self.markers = {int(m.id): math.sqrt(m.pose.pose.position.x ** 2 + m.pose.pose.position.y ** 2
+                                             + m.pose.pose.position.z ** 2)
+                        for m in msg.markers}
 
     def on_pose(self, msg):
         self.rates["pose"].tick()
@@ -320,8 +319,7 @@ class Watch:
                 f"observations {self.rates['observations'].text()}   {info}")
 
     def lines(self) -> list:
-        seen = ", ".join(f"{k.replace('marker_', '')} at {d:.2f} m"
-                         for k, d in sorted(self.markers.items())) or "none"
+        seen = ", ".join(f"{k} at {d:.2f} m" for k, d in sorted(self.markers.items())) or "none"
         pose = ""
         if self.pose is not None:
             q = self.pose.orientation
@@ -586,6 +584,9 @@ def cmd_setup(settings: dict, args) -> int:
                 out or err.splitlines()[-1] if err else out,
                 "inside the container: apt install python3-opencv python3-numpy (Ubuntu's "
                 "OpenCV has the aruco module); rclpy comes with ROS")
+    code, out, err = ssh_run(host, remote_shell(settings, "python3 -c 'import aruco_msgs.msg'"))
+    ok &= check("aruco_msgs on the car", code == 0, "" if code == 0 else (err.splitlines() or [""])[-1],
+                f"inside the container: apt install ros-{distro}-aruco-msgs")
     try:
         upload_node(settings)
         code, out, err = ssh_run(host, remote_shell(settings, f"python3 {REMOTE_NODE} --help"))

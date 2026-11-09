@@ -1,6 +1,7 @@
-"""Shows the fiducial observations in RViz: for every transform on `observations` (the
-car node's marker poses in the camera frame) a flat square of the marker's size and a
-label with its id and distance, as a MarkerArray on `observation_markers`. The markers
+"""Shows the fiducial observations in RViz: for every marker on `observations` (the car
+node's aruco_msgs/MarkerArray, poses in the camera frame) a flat square of the marker's
+size and a label with its id and distance, as a visualization MarkerArray on
+`observation_markers`, and a TF frame `marker_<id>` under the camera frame. The squares
 expire after `lifetime` seconds, so a fiducial that leaves the image disappears. Once a
 second it logs what is seen, in the camera frame: x forward, y left, z up."""
 
@@ -8,10 +9,12 @@ import colorsys
 import math
 
 import rclpy
+from aruco_msgs.msg import MarkerArray as ArucoMarkers
 from builtin_interfaces.msg import Duration
+from geometry_msgs.msg import TransformStamped
 from rclpy.node import Node
 from std_msgs.msg import ColorRGBA
-from tf2_msgs.msg import TFMessage
+from tf2_ros import TransformBroadcaster
 from visualization_msgs.msg import Marker, MarkerArray
 
 LOG_PERIOD = 1.0
@@ -29,7 +32,8 @@ class ObservationMarkers(Node):
         self.prefix = str(self.declare_parameter("marker_prefix", "marker_").value)
         self.lifetime = float(self.declare_parameter("lifetime", 0.5).value)
         self.pub = self.create_publisher(MarkerArray, "observation_markers", 10)
-        self.create_subscription(TFMessage, "observations", self.on_observations, 10)
+        self.broadcaster = TransformBroadcaster(self)
+        self.create_subscription(ArucoMarkers, "observations", self.on_observations, 10)
         self.seen = {}                  # id -> (x, y, z) of the last second
         self.frames = 0
         self.create_timer(LOG_PERIOD, self.log)
@@ -37,29 +41,30 @@ class ObservationMarkers(Node):
     def on_observations(self, msg):
         self.frames += 1
         out = MarkerArray()
+        tfs = []
         lifetime = Duration(sec=int(self.lifetime), nanosec=int((self.lifetime % 1.0) * 1e9))
-        for tf in msg.transforms:
-            name = tf.child_frame_id
-            if not name.startswith(self.prefix):
-                continue
-            try:
-                marker_id = int(name[len(self.prefix):])
-            except ValueError:
-                continue
-            t = tf.transform.translation
+        for observed in msg.markers:
+            marker_id = int(observed.id)
+            pose = observed.pose.pose
+            t = pose.position
             self.seen[marker_id] = (t.x, t.y, t.z)
+            tf = TransformStamped()
+            tf.header = msg.header
+            tf.child_frame_id = f"{self.prefix}{marker_id}"
+            tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = t.x, t.y, t.z
+            tf.transform.rotation = pose.orientation
+            tfs.append(tf)
             square = Marker()
-            square.header = tf.header
+            square.header = msg.header
             square.ns, square.id = "fiducial", marker_id
             square.type, square.action = Marker.CUBE, Marker.ADD
-            square.pose.position.x, square.pose.position.y, square.pose.position.z = t.x, t.y, t.z
-            square.pose.orientation = tf.transform.rotation
+            square.pose = pose
             square.scale.x = square.scale.y = self.size
             square.scale.z = 0.004
             square.color = color_of(marker_id)
             square.lifetime = lifetime
             label = Marker()
-            label.header = tf.header
+            label.header = msg.header
             label.ns, label.id = "label", marker_id
             label.type, label.action = Marker.TEXT_VIEW_FACING, Marker.ADD
             label.pose.position.x, label.pose.position.y = t.x, t.y
@@ -72,6 +77,7 @@ class ObservationMarkers(Node):
             out.markers += [square, label]
         if out.markers:
             self.pub.publish(out)
+            self.broadcaster.sendTransform(tfs)
 
     def log(self):
         if not self.frames:

@@ -40,8 +40,9 @@ The car runs only the camera node, `camslab/camslab/car_node.py`. It is one Pyth
 with no dependency on this workspace: `ros2 run camslab car` and the launch files copy it
 to `/tmp/camslab_car_node.py` on the car over ssh before every start, so a change here
 reaches the car without a build there. It opens the camera with OpenCV, detects the
-markers in every frame and publishes `observations` (one transform per visible marker in
-the estimator's camera frame, stamped at capture, empty when nothing is seen),
+markers in every frame and publishes `observations` (an `aruco_msgs/MarkerArray`: one
+marker per visible fiducial with its id and pose in the estimator's camera frame, stamped
+at capture, empty when nothing is seen),
 `camera_info` and `preview/compressed`, a JPEG of the frame at `preview_rate` Hz with the
 detections drawn. The motion capture client, the estimator, RViz and the web UI run on
 your computer, which must be on the car's network and in the same `ROS_DOMAIN_ID` as the
@@ -49,11 +50,12 @@ car (the vision guide uses 32):
 
     export ROS_DOMAIN_ID=32
 
-On the car, the node needs `python3` with `rclpy`, `numpy` and OpenCV with the aruco
-module in its ROS environment. On the Yahboom R2 that is the Jetson's `yahboom_robot`
-Docker container (user `jetson`); Ubuntu's OpenCV package has aruco, so once, inside it:
+On the car, the node needs `python3` with `rclpy`, `numpy`, OpenCV with the aruco
+module and the `aruco_msgs` package in its ROS environment. On the Yahboom R2 that is the
+Jetson's `yahboom_robot` Docker container (user `jetson`); Ubuntu's OpenCV package has
+aruco, so once, inside it:
 
-    apt update && apt install python3-opencv python3-numpy
+    apt update && apt install python3-opencv python3-numpy ros-humble-aruco-msgs
 
 Here, build the workspace with `camslab` and `camslab_webui` ({doc}`install`), set
 `camera_host` in `camslab/config/survey.yaml` to the car's `user@address` (`container`
@@ -228,9 +230,9 @@ markers it found and their distances. Check, from the top line down:
 
 1. `preview` runs at `preview_rate`, `observations` at the camera rate, and
    `camera_info` says `fx ...`, not `uncalibrated`.
-2. `seen` lists one marker per visible fiducial with its distance; in RViz they are TF
-   frames `marker_<id>` hanging off `<name>/camera`, and a marker straight ahead of the
-   camera has a positive x.
+2. `seen` lists one marker per visible fiducial with its distance; in RViz they are
+   squares and TF frames `marker_<id>` hanging off `<name>/camera` (from the
+   `observation_markers` node), and a marker straight ahead of the camera has a positive x.
 3. `pose` arrives at 100 Hz with the mocap position and yaw, and the TF frame
    `<name>/mocap` moves with the car.
 4. `estimate` arrives and the web UI's camera panel shows the two camera errors as NaN

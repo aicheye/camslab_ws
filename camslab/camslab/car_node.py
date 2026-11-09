@@ -3,16 +3,17 @@ car, where `ros2 run camslab car` and survey.launch.py upload this file and star
 ssh, or on this computer. It opens the camera with OpenCV, detects the ArUco markers in
 every frame and publishes, in the namespace /<name>:
 
-- `observations` (tf2_msgs/TFMessage): one transform <name>/camera -> marker_<id> per
-  visible marker, in the estimator's camera frame (x forward, z up), stamped when the
-  frame was grabbed. Published for every frame, empty when no marker is seen, so its
-  rate is the image rate.
+- `observations` (aruco_msgs/MarkerArray): one Marker per visible fiducial with its id
+  and pose in the estimator's camera frame (x forward, z up), stamped when the frame was
+  grabbed, frame_id <name>/camera. Published for every frame, empty when no marker is
+  seen, so its rate is the image rate.
 - `camera_info` (sensor_msgs/CameraInfo): the intrinsics in use, once a second.
 - `preview/compressed` (sensor_msgs/CompressedImage): the frame as JPEG at --preview-rate
   Hz, with the detections drawn when --draw is set. The only image that leaves the car.
 
-Self-contained on purpose: it needs rclpy, numpy and OpenCV with the aruco module, and
-nothing of camslab, because the car does not have the workspace. The constants and the
+Self-contained on purpose: it needs rclpy, numpy, OpenCV with the aruco module and the
+aruco_msgs package (ros-<distro>-aruco-msgs), and nothing of camslab, because the car
+does not have the workspace. The constants and the
 frame convention are those of camslab.aruco; tests/fiducial/test_car_node.py keeps them
 equal. Settings come as command line arguments (camslab.car.node_arguments builds them).
 
@@ -198,11 +199,10 @@ def open_camera(device, width, height, fps, pixel_format):
 def run(args):
     import cv2
     import rclpy
-    from geometry_msgs.msg import TransformStamped
+    from aruco_msgs.msg import Marker, MarkerArray
     from rclpy.node import Node
     from rclpy.qos import qos_profile_sensor_data
     from sensor_msgs.msg import CameraInfo, CompressedImage
-    from tf2_msgs.msg import TFMessage
 
     rclpy.init()
     node = Node("camera", namespace=f"/{args.name}")
@@ -223,7 +223,7 @@ def run(args):
         return 2
     K, dist = calibration if calibration is not None else (None, None)
     detector = Detector(args.dictionary, args.marker_size, K, dist, args.ids) if args.detect else None
-    observations_pub = node.create_publisher(TFMessage, "observations", 10)
+    observations_pub = node.create_publisher(MarkerArray, "observations", 10)
     info_pub = node.create_publisher(CameraInfo, "camera_info", qos_profile_sensor_data)
     preview_pub = node.create_publisher(CompressedImage, "preview/compressed",
                                         qos_profile_sensor_data)
@@ -288,19 +288,21 @@ def run(args):
                 found = detector.detect(image)
                 detect_time += time.monotonic() - t0
                 markers += len(found)
-                tfs = []
+                out = MarkerArray()
+                out.header.stamp = stamp
+                out.header.frame_id = frame_id
                 for marker_id, (R, t) in found.items():
-                    tf = TransformStamped()
-                    tf.header.stamp = stamp
-                    tf.header.frame_id = frame_id
-                    tf.child_frame_id = f"marker_{marker_id}"
-                    tf.transform.translation.x, tf.transform.translation.y, tf.transform.translation.z = (
-                        float(v) for v in t)
+                    m = Marker()
+                    m.header = out.header
+                    m.id = int(marker_id)
+                    p = m.pose.pose
+                    p.position.x, p.position.y, p.position.z = (float(v) for v in t)
                     qx, qy, qz, qw = quaternion_of(R)
-                    tf.transform.rotation.x, tf.transform.rotation.y = float(qx), float(qy)
-                    tf.transform.rotation.z, tf.transform.rotation.w = float(qz), float(qw)
-                    tfs.append(tf)
-                observations_pub.publish(TFMessage(transforms=tfs))
+                    p.orientation.x, p.orientation.y = float(qx), float(qy)
+                    p.orientation.z, p.orientation.w = float(qz), float(qw)
+                    m.confidence = 1.0
+                    out.markers.append(m)
+                observations_pub.publish(out)
             if preview_period is not None and now - last_preview >= preview_period:
                 last_preview = now
                 if args.draw and detector is not None:
