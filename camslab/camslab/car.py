@@ -8,6 +8,7 @@ client, the estimator, RViz and the web UI run here (docs/hardware-survey.md).
     ros2 run camslab car setup                        ssh key, container, ROS, OpenCV, camera, clock
     ros2 run camslab car clock                        set the car's clock from this computer, once
     ros2 run camslab car chrony                       keep it there: chrony on the car against this computer
+    ros2 run camslab car install ros-humble-aruco-msgs   a ROS package onto the car through this computer
     ros2 run camslab car camera                       the camera node on the car, rates here
     ros2 run camslab car calibrate --name <model>_<w>x<h>
     ros2 run camslab car status [--show]              topic rates; --show: the preview
@@ -24,6 +25,7 @@ image (they are all flashed from it) and that answer the login.
 import argparse
 import collections
 import concurrent.futures
+import gzip
 import ipaddress
 import math
 import os
@@ -33,6 +35,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.request
 
 import numpy as np
 import yaml
@@ -45,6 +48,7 @@ NODE_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "car_node.
 REMOTE_NODE = "/tmp/camslab_car_node.py"        # where the car keeps its copy
 CLOCK_OFFSET = 0.02                             # tolerated car clock offset [s]
 CHRONY_MARK = "# camslab: serve time to the lab cars (ros2 run camslab car chrony)"
+ROS_APT = "http://packages.ros.org/ros2/ubuntu"     # where the cars' ROS packages come from
 
 
 # --- settings and the remote commands -------------------------------------------------------
@@ -586,9 +590,20 @@ def cmd_setup(settings: dict, args) -> int:
                 out or err.splitlines()[-1] if err else out,
                 "inside the container: apt install python3-opencv python3-numpy (Ubuntu's "
                 "OpenCV has the aruco module); rclpy comes with ROS")
-    code, out, err = ssh_run(host, remote_shell(settings, "python3 -c 'import aruco_msgs.msg'"))
+    probe = "python3 -c 'import aruco_msgs.msg'"
+    code, out, err = ssh_run(host, remote_shell(settings, probe))
+    if code != 0:
+        # The cars have no internet on the lab network: fetch the package here, send it over.
+        print(f"  ...  no aruco_msgs on the car; installing ros-{distro}-aruco-msgs through "
+              "this computer", flush=True)
+        try:
+            install_ros_deb(settings, f"ros-{distro}-aruco-msgs")
+            code, out, err = ssh_run(host, remote_shell(settings, probe))
+        except (RuntimeError, OSError) as e:
+            err = str(e)
     ok &= check("aruco_msgs on the car", code == 0, "" if code == 0 else (err.splitlines() or [""])[-1],
-                f"inside the container: apt install ros-{distro}-aruco-msgs")
+                f"ros2 run camslab car install ros-{distro}-aruco-msgs, or apt install it in the "
+                "car's ROS environment when it has internet")
     try:
         upload_node(settings)
         code, out, err = ssh_run(host, remote_shell(settings, f"python3 {REMOTE_NODE} --help"))
@@ -681,6 +696,68 @@ def cmd_clock(settings: dict, args) -> int:
     print("The Jetson loses the time at every boot without a battery-backed clock: run this "
           "after each power-up, or install chrony on the car against this computer.")
     return 0 if ok else 1
+
+
+# --- packages for a car without internet -----------------------------------------------------
+
+def ros_deb_url(package: str, codename: str, arch: str) -> str:
+    """The URL of `package`'s .deb in the ROS 2 apt repository for an Ubuntu `codename`
+    and `arch`, from the repository's package index. A RuntimeError when it is not there."""
+    index = f"{ROS_APT}/dists/{codename}/main/binary-{arch}/Packages.gz"
+    with urllib.request.urlopen(index, timeout=30) as response:
+        text = gzip.decompress(response.read()).decode(errors="replace")
+    for stanza in text.split("\n\n"):
+        if f"Package: {package}\n" in stanza + "\n":
+            for line in stanza.splitlines():
+                if line.startswith("Filename: "):
+                    return f"{ROS_APT}/{line[len('Filename: '):].strip()}"
+    raise RuntimeError(f"{package} is not in {index}")
+
+
+def car_platform(settings: dict):
+    """(Ubuntu codename, dpkg architecture) of the car's ROS environment, or None."""
+    code, out, _ = ssh_run(str(settings["camera_host"]), remote_shell(
+        settings, ". /etc/os-release && echo $VERSION_CODENAME && dpkg --print-architecture"))
+    parts = out.split()
+    return (parts[0], parts[1]) if code == 0 and len(parts) == 2 else None
+
+
+def install_ros_deb(settings: dict, package: str) -> str:
+    """Installs a ROS package on the car when the car has no internet: the .deb is
+    downloaded here and sent through ssh into the car's ROS environment, where dpkg
+    installs it (its dependencies must be there already, as a message package's are).
+    Returns the deb's name; a RuntimeError says what failed."""
+    host = str(settings["camera_host"])
+    platform = car_platform(settings)
+    if platform is None:
+        raise RuntimeError("could not read the car's Ubuntu release and architecture")
+    url = ros_deb_url(package, *platform)
+    name = url.rpartition("/")[2]
+    with urllib.request.urlopen(url, timeout=120) as response:
+        deb = response.read()
+    staged = f"/tmp/{name}"
+    sudo = "" if settings.get("container") else "sudo -n "
+    command = remote_shell(settings, f"cat > {staged} && {sudo}dpkg -i {staged}", stdin=True)
+    result = subprocess.run([*SSH, "-o", "BatchMode=yes", host, command], input=deb,
+                            capture_output=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError(f"dpkg -i {name} on the car failed: "
+                           f"{result.stderr.decode(errors='replace').strip()[-400:]}")
+    return name
+
+
+def cmd_install(settings: dict, args) -> int:
+    """`car install <package>`: a ROS package onto the car through this computer."""
+    if not check_ssh(settings):
+        return 1
+    for package in args.packages:
+        try:
+            name = install_ros_deb(settings, package)
+        except (RuntimeError, OSError) as e:
+            print(f"{package}: {e}")
+            return 1
+        print(f"{package}: installed {name} on the car")
+    return 0
 
 
 # --- chrony ----------------------------------------------------------------------------------
@@ -1033,6 +1110,8 @@ def main(argv=None) -> int:
     find.add_argument("--subnet", default="", help="network to scan; default: the /24 of camera_host")
     sub.add_parser("setup", help="check ssh, the container, ROS, OpenCV, the camera and the clock")
     sub.add_parser("clock", help="set the car's clock to this computer's, once")
+    install = sub.add_parser("install", help="install ROS packages on the car through this computer")
+    install.add_argument("packages", nargs="+", help="e.g. ros-humble-aruco-msgs")
     chrony = sub.add_parser("chrony", help="keep the car's clock on this computer's with chrony")
     chrony.add_argument("--timesyncd", action="store_true",
                         help="use systemd-timesyncd on the car even if chrony could be installed")
@@ -1065,9 +1144,12 @@ def main(argv=None) -> int:
         p.add_argument("overrides", nargs="*", metavar="key:=value",
                        help="override a value of the settings file")
     args = parser.parse_args(argv)
+    if args.command == "install":       # the package list swallows key:=value overrides
+        args.overrides += [p for p in args.packages if "=" in p]
+        args.packages = [p for p in args.packages if "=" not in p]
     settings = load_settings(args.config, args.overrides)
     return {"find": cmd_find, "setup": cmd_setup, "clock": cmd_clock, "chrony": cmd_chrony,
-            "camera": cmd_camera,
+            "install": cmd_install, "camera": cmd_camera,
             "calibrate": cmd_calibrate, "status": cmd_status}[args.command](settings, args)
 
 

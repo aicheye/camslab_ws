@@ -242,3 +242,32 @@ def test_route_to_parses_ip_route(monkeypatch):
     assert car.route_to("192.168.1.85") == ("wlp1s0", "192.168.1.153")
     monkeypatch.setattr(car.subprocess, "run", lambda *a, **k: Result("RTNETLINK answers: Network is unreachable\n"))
     assert car.route_to("192.168.1.85") is None
+
+
+def test_ros_deb_url_reads_the_package_index(monkeypatch):
+    import gzip
+    import io
+
+    index = ("Package: ros-humble-aruco\nFilename: pool/main/r/ros-humble-aruco/x.deb\n\n"
+             "Package: ros-humble-aruco-msgs\nVersion: 5.0.4-1jammy.20231218.234232\n"
+             "Filename: pool/main/r/ros-humble-aruco-msgs/ros-humble-aruco-msgs_5.0.4-1jammy.20231218.234232_arm64.deb\n\n")
+    seen = []
+
+    class Response(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(url, timeout=0):
+        seen.append(url)
+        return Response(gzip.compress(index.encode()))
+
+    monkeypatch.setattr(car.urllib.request, "urlopen", fake_urlopen)
+    url = car.ros_deb_url("ros-humble-aruco-msgs", "jammy", "arm64")
+    assert seen == ["http://packages.ros.org/ros2/ubuntu/dists/jammy/main/binary-arm64/Packages.gz"]
+    assert url == ("http://packages.ros.org/ros2/ubuntu/pool/main/r/ros-humble-aruco-msgs/"
+                   "ros-humble-aruco-msgs_5.0.4-1jammy.20231218.234232_arm64.deb")
+    with pytest.raises(RuntimeError, match="not in"):
+        car.ros_deb_url("ros-humble-nothing", "jammy", "arm64")

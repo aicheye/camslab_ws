@@ -52,10 +52,13 @@ car (the vision guide uses 32):
 
 On the car, the node needs `python3` with `rclpy`, `numpy`, OpenCV with the aruco
 module and the `aruco_msgs` package in its ROS environment. On the Yahboom R2 that is the
-Jetson's `yahboom_robot` Docker container (user `jetson`); Ubuntu's OpenCV package has
-aruco, so once, inside it:
+Jetson's `yahboom_robot` Docker container (user `jetson`), which ships with OpenCV 4.8
+and aruco. The cars have no internet on the lab network (apt in the container fails at a
+`10.0.0.1` proxy), so `car setup` installs a missing `aruco_msgs` by downloading the
+`.deb` from packages.ros.org here and sending it over ssh; the same works for any ROS
+package whose dependencies are already there:
 
-    apt update && apt install python3-opencv python3-numpy ros-humble-aruco-msgs
+    ros2 run camslab car install ros-humble-aruco-msgs
 
 Here, build the workspace with `camslab` and `camslab_webui` ({doc}`install`), set
 `camera_host` in `camslab/config/survey.yaml` to the car's `user@address` (`container`
