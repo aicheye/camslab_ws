@@ -16,7 +16,7 @@ tracker: ""                      # rigid body name in the mocap software; empty 
 # container when `container` is set, after `ros2 run camslab car setup` installed the ssh
 # key); it streams the marker poses and a preview, and everything else runs on this
 # computer. Empty: the camera node runs here, where the camera is plugged in.
-camera_host: jetson@192.168.1.127
+camera_host: jetson@192.168.1.85
 
 container: yahboom_robot         # Docker container with ROS on the car; empty: none
 ros_distro: humble               # ROS on the car

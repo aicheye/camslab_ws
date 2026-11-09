@@ -6,6 +6,7 @@ client, the estimator, RViz and the web UI run here (docs/hardware-survey.md).
 
     ros2 run camslab car find [--subnet 192.168.1.0/24]   the cars on the lab network
     ros2 run camslab car setup                        ssh key, container, ROS, OpenCV, camera, clock
+    ros2 run camslab car clock                        set the car's clock from this computer
     ros2 run camslab car camera                       the camera node on the car, rates here
     ros2 run camslab car calibrate --name <model>_<w>x<h>
     ros2 run camslab car status [--show]              topic rates; --show: the preview
@@ -622,13 +623,40 @@ def cmd_setup(settings: dict, args) -> int:
         ok &= check("clock offset", abs(offset) <= CLOCK_OFFSET,
                     f"{1e3 * offset:+.0f} ms (round trip {1e3 * trip:.0f} ms)",
                     f"the car's clock is off by more than {1e3 * CLOCK_OFFSET:.0f} ms, so the "
-                    "image stamps and the mocap poses disagree in time; sync it (chrony/NTP "
-                    "against this computer, or `sudo date -s` on the car for one session)")
+                    "image stamps and the mocap poses disagree in time; `ros2 run camslab car "
+                    "clock` sets it for this session (chrony/NTP against this computer for good)")
     code, out, _ = ssh_run(host, remote_shell(settings, f"pgrep -af '^python3 {REMOTE_NODE}' || true"))
     check("camera node now", True, "running" if out else "not running")
     print("All checks passed." if ok else "Fix the FAIL lines above, then run setup again.")
     print(f"Next: ros2 run camslab car calibrate --name <model>_{settings['image_width']}x"
           f"{settings['image_height']}, or ros2 launch camslab survey.launch.py")
+    return 0 if ok else 1
+
+
+def cmd_clock(settings: dict, args) -> int:
+    """Sets the car's clock to this computer's over ssh (sudo may ask for the car's
+    password), then measures the offset again."""
+    host = str(settings.get("camera_host") or "")
+    if not host or not check_ssh(settings):
+        print("set camera_host in config/survey.yaml" if not host else "")
+        return 1
+    before = clock_offset(settings)
+    if before is not None:
+        print(f"car clock offset before: {before[0]:+.3f} s")
+    # An epoch stamp, so the car's locale cannot misparse it; -t lets sudo prompt.
+    code = subprocess.run([*SSH, "-t", host, f"sudo date -u -s @{int(time.time())}"]).returncode
+    if code != 0:
+        print(f"setting the date on {host} failed ({code})")
+        return 1
+    after = clock_offset(settings)
+    if after is None:
+        print("the car did not answer the clock check")
+        return 1
+    ok = abs(after[0]) <= CLOCK_OFFSET
+    print(f"car clock offset now: {1e3 * after[0]:+.0f} ms (round trip {1e3 * after[1]:.0f} ms)"
+          + ("" if ok else f", still above {1e3 * CLOCK_OFFSET:.0f} ms"))
+    print("The Jetson loses the time at every boot without a battery-backed clock: run this "
+          "after each power-up, or install chrony on the car against this computer.")
     return 0 if ok else 1
 
 
@@ -832,6 +860,7 @@ def main(argv=None) -> int:
     find = sub.add_parser("find", help="scan the lab network for the cars")
     find.add_argument("--subnet", default="", help="network to scan; default: the /24 of camera_host")
     sub.add_parser("setup", help="check ssh, the container, ROS, OpenCV, the camera and the clock")
+    sub.add_parser("clock", help="set the car's clock to this computer's")
     sub.add_parser("camera", help="run the camera node on the car and show the rates here")
     cal = sub.add_parser("calibrate", help="calibrate the camera from its image topic")
     cal.add_argument("--name", required=True,
@@ -862,7 +891,7 @@ def main(argv=None) -> int:
                        help="override a value of the settings file")
     args = parser.parse_args(argv)
     settings = load_settings(args.config, args.overrides)
-    return {"find": cmd_find, "setup": cmd_setup, "camera": cmd_camera,
+    return {"find": cmd_find, "setup": cmd_setup, "clock": cmd_clock, "camera": cmd_camera,
             "calibrate": cmd_calibrate, "status": cmd_status}[args.command](settings, args)
 
 

@@ -75,9 +75,14 @@ the car's password once), then checks the container, ROS, the Python modules, th
 node uploads and runs, the camera device, that the configured pixel format and image size
 are among the camera's formats, and the car's clock. The clock matters: the observations
 are stamped by the car and the motion capture poses by this computer, and the estimator
-pairs them by time, so an offset above 20 ms fails the check. Sync the Jetson with
-chrony or NTP against this computer, or for one session `sudo date -s "$(date)"` over
-ssh. Fix any `FAIL` line it prints and run it again. Run it once for every car, and again
+pairs them by time, so an offset above 20 ms fails the check. The Jetson has no
+battery-backed clock and starts months behind after every power-up, so after each boot
+
+    ros2 run camslab car clock
+
+sets its clock to this computer's over ssh (sudo may ask for the car's password) and
+measures the offset again; chrony on the car against this computer fixes it for good.
+Fix any `FAIL` line setup prints and run it again. Run it once for every car, and again
 for a car at a new address: `camera` and `calibrate` run over ssh without a terminal, so
 they stop at once, instead of waiting for images, when the car would prompt. Every `car`
 command and the launch files read `config/survey.yaml`; a value is overridden on the
