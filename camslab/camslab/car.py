@@ -633,28 +633,46 @@ def cmd_setup(settings: dict, args) -> int:
     return 0 if ok else 1
 
 
+def set_clock(host: str, lead: float) -> int:
+    """`sudo date` on the car to this computer's time plus `lead`, the delay between
+    reading the time here and the command running there. An epoch stamp with
+    milliseconds, so the car's locale cannot misparse it; -t lets sudo prompt."""
+    return subprocess.run([*SSH, "-t", host, f"sudo date -u -s @{time.time() + lead:.3f}"],
+                          stdout=subprocess.DEVNULL).returncode
+
+
 def cmd_clock(settings: dict, args) -> int:
     """Sets the car's clock to this computer's over ssh (sudo may ask for the car's
-    password), then measures the offset again."""
+    password). The first pass lands behind by the ssh connection time; the next passes
+    add the offset just measured, until it is within CLOCK_OFFSET."""
     host = str(settings.get("camera_host") or "")
-    if not host or not check_ssh(settings):
-        print("set camera_host in config/survey.yaml" if not host else "")
+    if not host:
+        print("set camera_host in config/survey.yaml")
+        return 1
+    if not check_ssh(settings):
         return 1
     before = clock_offset(settings)
     if before is not None:
-        print(f"car clock offset before: {before[0]:+.3f} s")
-    # An epoch stamp, so the car's locale cannot misparse it; -t lets sudo prompt.
-    code = subprocess.run([*SSH, "-t", host, f"sudo date -u -s @{int(time.time())}"]).returncode
-    if code != 0:
-        print(f"setting the date on {host} failed ({code})")
-        return 1
-    after = clock_offset(settings)
-    if after is None:
-        print("the car did not answer the clock check")
-        return 1
+        print(f"car clock offset before: {before[0]:+.3f} s", flush=True)
+    lead, after = 0.0, None
+    for _ in range(4):
+        code = set_clock(host, lead)
+        if code != 0:
+            print(f"setting the date on {host} failed ({code})")
+            return 1
+        after = clock_offset(settings)
+        if after is None:
+            print("the car did not answer the clock check")
+            return 1
+        print(f"car clock offset now: {1e3 * after[0]:+.0f} ms (round trip {1e3 * after[1]:.0f} ms)",
+              flush=True)
+        if abs(after[0]) <= CLOCK_OFFSET:
+            break
+        lead -= after[0]
     ok = abs(after[0]) <= CLOCK_OFFSET
-    print(f"car clock offset now: {1e3 * after[0]:+.0f} ms (round trip {1e3 * after[1]:.0f} ms)"
-          + ("" if ok else f", still above {1e3 * CLOCK_OFFSET:.0f} ms"))
+    if not ok:
+        print(f"still above {1e3 * CLOCK_OFFSET:.0f} ms; the ssh connection time varies too much, "
+              "run it again")
     print("The Jetson loses the time at every boot without a battery-backed clock: run this "
           "after each power-up, or install chrony on the car against this computer.")
     return 0 if ok else 1
