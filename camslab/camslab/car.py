@@ -6,7 +6,8 @@ client, the estimator, RViz and the web UI run here (docs/hardware-survey.md).
 
     ros2 run camslab car find [--subnet 192.168.1.0/24]   the cars on the lab network
     ros2 run camslab car setup                        ssh key, container, ROS, OpenCV, camera, clock
-    ros2 run camslab car clock                        set the car's clock from this computer
+    ros2 run camslab car clock                        set the car's clock from this computer, once
+    ros2 run camslab car chrony                       keep it there: chrony on the car against this computer
     ros2 run camslab car camera                       the camera node on the car, rates here
     ros2 run camslab car calibrate --name <model>_<w>x<h>
     ros2 run camslab car status [--show]              topic rates; --show: the preview
@@ -43,6 +44,7 @@ REMOTE_ENV = "source /opt/ros/{distro}/setup.bash && export ROS_DOMAIN_ID={domai
 NODE_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "car_node.py")
 REMOTE_NODE = "/tmp/camslab_car_node.py"        # where the car keeps its copy
 CLOCK_OFFSET = 0.02                             # tolerated car clock offset [s]
+CHRONY_MARK = "# camslab: serve time to the lab cars (ros2 run camslab car chrony)"
 
 
 # --- settings and the remote commands -------------------------------------------------------
@@ -627,7 +629,7 @@ def cmd_setup(settings: dict, args) -> int:
                     f"{1e3 * offset:+.0f} ms (round trip {1e3 * trip:.0f} ms)",
                     f"the car's clock is off by more than {1e3 * CLOCK_OFFSET:.0f} ms, so the "
                     "image stamps and the mocap poses disagree in time; `ros2 run camslab car "
-                    "clock` sets it for this session (chrony/NTP against this computer for good)")
+                    "chrony` keeps it synced to this computer (`car clock` sets it once)")
     code, out, _ = ssh_run(host, remote_shell(settings, f"pgrep -af '^python3 {REMOTE_NODE}' || true"))
     check("camera node now", True, "running" if out else "not running")
     print("All checks passed." if ok else "Fix the FAIL lines above, then run setup again.")
@@ -679,6 +681,155 @@ def cmd_clock(settings: dict, args) -> int:
     print("The Jetson loses the time at every boot without a battery-backed clock: run this "
           "after each power-up, or install chrony on the car against this computer.")
     return 0 if ok else 1
+
+
+# --- chrony ----------------------------------------------------------------------------------
+
+def route_to(address: str):
+    """(interface, this computer's address) on the way to `address`, from `ip route get`;
+    None when there is no route."""
+    out = subprocess.run(["ip", "-4", "route", "get", address], capture_output=True, text=True).stdout
+    words = out.split()
+    if "dev" not in words or "src" not in words:
+        return None
+    return words[words.index("dev") + 1], words[words.index("src") + 1]
+
+
+def ntp_rich_rule(address: str) -> str:
+    """The firewalld rule that lets this one address reach chronyd here, and nothing else."""
+    return f'rule family="ipv4" source address="{address}/32" service name="ntp" accept'
+
+
+def chrony_server_lines(address: str) -> list:
+    """What /etc/chrony.conf here needs to serve the car: its address allowed, and a local
+    stratum so time is served even without an upstream (no internet in the lab)."""
+    return [f"allow {address}", "local stratum 10"]
+
+
+def chrony_client_conf(server: str) -> str:
+    """/etc/chrony/chrony.conf for the car: this computer as the only source, polled every
+    4 to 16 s, stepped whenever it is more than 1 s off (the Jetson boots months behind),
+    slewed otherwise."""
+    return (f"# Written by `ros2 run camslab car chrony`: follow the survey computer.\n"
+            f"server {server} iburst minpoll 2 maxpoll 4 prefer\n"
+            "makestep 1 -1\n"
+            "driftfile /var/lib/chrony/chrony.drift\n"
+            "logdir /var/log/chrony\n")
+
+
+def timesyncd_conf(server: str) -> str:
+    """/etc/systemd/timesyncd.conf for a car without chrony: Ubuntu's SNTP client, polled
+    every 16 to 64 s."""
+    return f"[Time]\nNTP={server}\nPollIntervalMinSec=16\nPollIntervalMaxSec=64\n"
+
+
+def sudo_here(command: list) -> bool:
+    return subprocess.run(["sudo", *command]).returncode == 0
+
+
+def cmd_chrony(settings: dict, args) -> int:
+    """Keeps the car's clock on this computer's. Here: chronyd serves time to the car's
+    address, with a firewalld rule for that one address in the zone of the interface
+    toward the car (no port is opened to anyone else). On the car's host (not the
+    container; the clock is the kernel's): chrony follows this computer, or
+    systemd-timesyncd when chrony is not installed and cannot be (no internet). Run it
+    once per car, and again when this computer's address on the lab network changes."""
+    host = str(settings.get("camera_host") or "")
+    if not host:
+        print("set camera_host in config/survey.yaml")
+        return 1
+    address = host.rpartition("@")[2]
+    route = route_to(address)
+    if route is None:
+        print(f"no route to {address}: is this computer on the lab network?")
+        return 1
+    dev, me = route
+    print(f"Car {settings['name']} at {address}; this computer is {me} on {dev}")
+    if not check_ssh(settings):
+        return 1
+    ok = True
+    # 1. chronyd here
+    active = subprocess.run(["systemctl", "is-active", "chronyd"], capture_output=True, text=True)
+    ok &= check("chronyd on this computer", active.stdout.strip() == "active", active.stdout.strip(),
+                "sudo dnf install chrony && sudo systemctl enable --now chronyd (apt on Ubuntu)")
+    if not ok:
+        return 1
+    # 2. serve the car: a marked block at the end of /etc/chrony.conf
+    with open("/etc/chrony.conf") as f:
+        conf = f.read().splitlines()
+    missing = [line for line in chrony_server_lines(address) if line not in conf]
+    if missing:
+        block = "\n".join(([CHRONY_MARK] if CHRONY_MARK not in conf else []) + missing) + "\n"
+        print(f"  ...  adding to /etc/chrony.conf: {'; '.join(missing)} (sudo)")
+        done = (sudo_here(["sh", "-c", f"printf '%s' {shlex.quote(block)} >> /etc/chrony.conf"])
+                and sudo_here(["systemctl", "restart", "chronyd"]))
+        ok &= check("chrony.conf serves the car", done, ", ".join(missing))
+    else:
+        check("chrony.conf serves the car", True, "already")
+    # 3. firewall: NTP from the car's address only, in the zone of `dev`
+    fw = subprocess.run(["systemctl", "is-active", "firewalld"], capture_output=True, text=True)
+    if fw.stdout.strip() == "active":
+        zone = subprocess.run(["firewall-cmd", f"--get-zone-of-interface={dev}"],
+                              capture_output=True, text=True).stdout.strip() or "public"
+        rules = subprocess.run(["firewall-cmd", "--zone", zone, "--list-rich-rules"],
+                               capture_output=True, text=True).stdout
+        rule = ntp_rich_rule(address)
+        if rule.replace('"', "") in rules.replace('"', ""):
+            check(f"firewalld zone {zone}", True, f"NTP from {address} already allowed")
+        else:
+            print(f"  ...  allowing NTP from {address} only, zone {zone} (sudo)")
+            done = (sudo_here(["firewall-cmd", "--permanent", "--zone", zone, "--add-rich-rule", rule])
+                    and sudo_here(["firewall-cmd", "--reload"]))
+            ok &= check(f"firewalld zone {zone}", done, f"NTP from {address}")
+    else:
+        check("firewalld", True, "not running; nothing to open")
+    if not ok:
+        return 1
+    # 4. the car's host follows this computer
+    code, out, _ = ssh_run(host, "command -v chronyd || true")
+    has_chrony = bool(out)
+    if not has_chrony and not args.timesyncd:
+        print("  ...  installing chrony on the car (apt, needs internet there; sudo on the car)")
+        has_chrony = subprocess.run([*SSH, "-t", host, "sudo apt-get install -y chrony"]).returncode == 0
+        if not has_chrony:
+            print("  ...  no chrony: falling back to systemd-timesyncd")
+    if has_chrony:
+        conf, target, service = chrony_client_conf(me), "/etc/chrony/chrony.conf", "chrony"
+    else:
+        conf, target, service = timesyncd_conf(me), "/etc/systemd/timesyncd.conf", "systemd-timesyncd"
+    staged = "/tmp/camslab_timesync.conf"
+    upload = subprocess.run([*SSH, "-o", "BatchMode=yes", host, f"cat > {staged}"], input=conf.encode(),
+                            capture_output=True)
+    if upload.returncode != 0:
+        check("config uploaded to the car", False, "", upload.stderr.decode(errors="replace").strip())
+        return 1
+    install = (f"sudo install -m 644 {staged} {target} && sudo systemctl enable {service} "
+               f"&& sudo systemctl restart {service}" + (" && sudo timedatectl set-ntp true"
+                                                         if service == "systemd-timesyncd" else ""))
+    done = subprocess.run([*SSH, "-t", host, install]).returncode == 0
+    ok &= check(f"{service} on the car follows {me}", done, target)
+    if not ok:
+        return 1
+    # 5. wait for the car to sync
+    print("  ...  waiting for the car's clock to follow", flush=True)
+    offset = None
+    for _ in range(15):
+        time.sleep(2.0)
+        offset = clock_offset(settings)
+        if offset is not None and abs(offset[0]) <= CLOCK_OFFSET:
+            break
+    synced = offset is not None and abs(offset[0]) <= CLOCK_OFFSET
+    detail = "no answer" if offset is None else f"{1e3 * offset[0]:+.0f} ms"
+    check("car clock offset", synced, detail,
+          f"not within {1e3 * CLOCK_OFFSET:.0f} ms yet; on the car `chronyc tracking` (or "
+          "`timedatectl timesync-status`) shows whether it reaches this computer")
+    if has_chrony:
+        code, out, _ = ssh_run(host, "chronyc -n sources 2>/dev/null | tail -n +3")
+        if out:
+            print("       " + out.replace("\n", "\n       "))
+    print(f"The car now follows {me}. Run this again if this computer gets another address "
+          "on the lab network.")
+    return 0 if synced else 1
 
 
 def cmd_camera(settings: dict, args) -> int:
@@ -881,7 +1032,10 @@ def main(argv=None) -> int:
     find = sub.add_parser("find", help="scan the lab network for the cars")
     find.add_argument("--subnet", default="", help="network to scan; default: the /24 of camera_host")
     sub.add_parser("setup", help="check ssh, the container, ROS, OpenCV, the camera and the clock")
-    sub.add_parser("clock", help="set the car's clock to this computer's")
+    sub.add_parser("clock", help="set the car's clock to this computer's, once")
+    chrony = sub.add_parser("chrony", help="keep the car's clock on this computer's with chrony")
+    chrony.add_argument("--timesyncd", action="store_true",
+                        help="use systemd-timesyncd on the car even if chrony could be installed")
     sub.add_parser("camera", help="run the camera node on the car and show the rates here")
     cal = sub.add_parser("calibrate", help="calibrate the camera from its image topic")
     cal.add_argument("--name", required=True,
@@ -912,7 +1066,8 @@ def main(argv=None) -> int:
                        help="override a value of the settings file")
     args = parser.parse_args(argv)
     settings = load_settings(args.config, args.overrides)
-    return {"find": cmd_find, "setup": cmd_setup, "clock": cmd_clock, "camera": cmd_camera,
+    return {"find": cmd_find, "setup": cmd_setup, "clock": cmd_clock, "chrony": cmd_chrony,
+            "camera": cmd_camera,
             "calibrate": cmd_calibrate, "status": cmd_status}[args.command](settings, args)
 
 

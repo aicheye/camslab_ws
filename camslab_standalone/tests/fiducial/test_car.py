@@ -219,3 +219,26 @@ def test_session_refuses_too_few_views(tmp_path):
     with pytest.raises(RuntimeError, match="0 board views"):
         session.finish()
     assert math.isinf(session.last_kept) and session.status().startswith("no tags")
+
+
+def test_chrony_configs_name_the_right_addresses():
+    assert car.ntp_rich_rule("192.168.1.85") == (
+        'rule family="ipv4" source address="192.168.1.85/32" service name="ntp" accept')
+    assert car.chrony_server_lines("192.168.1.85") == ["allow 192.168.1.85", "local stratum 10"]
+    client = car.chrony_client_conf("192.168.1.153")
+    assert "server 192.168.1.153 iburst minpoll 2 maxpoll 4 prefer\n" in client
+    assert "makestep 1 -1\n" in client and "pool" not in client
+    assert car.timesyncd_conf("192.168.1.153") == (
+        "[Time]\nNTP=192.168.1.153\nPollIntervalMinSec=16\nPollIntervalMaxSec=64\n")
+
+
+def test_route_to_parses_ip_route(monkeypatch):
+    class Result:
+        def __init__(self, stdout):
+            self.stdout = stdout
+
+    monkeypatch.setattr(car.subprocess, "run", lambda *a, **k: Result(
+        "192.168.1.85 dev wlp1s0 src 192.168.1.153 uid 1000 \n    cache \n"))
+    assert car.route_to("192.168.1.85") == ("wlp1s0", "192.168.1.153")
+    monkeypatch.setattr(car.subprocess, "run", lambda *a, **k: Result("RTNETLINK answers: Network is unreachable\n"))
+    assert car.route_to("192.168.1.85") is None

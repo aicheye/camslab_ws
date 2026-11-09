@@ -78,13 +78,21 @@ node uploads and runs, the camera device, that the configured pixel format and i
 are among the camera's formats, and the car's clock. The clock matters: the observations
 are stamped by the car and the motion capture poses by this computer, and the estimator
 pairs them by time, so an offset above 20 ms fails the check. The Jetson has no
-battery-backed clock and starts months behind after every power-up, so after each boot
+battery-backed clock, starts months behind after every power-up and drifts about 20 ms
+in ten minutes, so once per car
 
-    ros2 run camslab car clock
+    ros2 run camslab car chrony
 
-sets its clock to this computer's over ssh (sudo may ask for the car's password) and
-measures the offset again; chrony on the car against this computer fixes it for good.
-Fix any `FAIL` line setup prints and run it again. Run it once for every car, and again
+makes its clock follow this computer's: here it adds `allow <car address>` and
+`local stratum 10` to `/etc/chrony.conf` and a firewalld rule that accepts NTP from that
+one address in the zone of the interface toward the car (nothing is opened to anyone
+else); on the car's host it installs chrony, or configures `systemd-timesyncd` when
+chrony cannot be installed without internet, with this computer as the only time source.
+Both sides ask for sudo. It then waits for the offset to come under 20 ms and prints it.
+Run it again when this computer gets another address on the lab network, since the car
+is configured with that address. `ros2 run camslab car clock` sets the clock once over
+ssh instead, for a quick session without chrony. Fix any `FAIL` line setup prints and run
+it again. Run it once for every car, and again
 for a car at a new address: `camera` and `calibrate` run over ssh without a terminal, so
 they stop at once, instead of waiting for images, when the car would prompt. Every `car`
 command and the launch files read `config/survey.yaml`; a value is overridden on the
