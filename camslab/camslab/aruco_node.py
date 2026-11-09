@@ -1,7 +1,9 @@
 """Detects ArUco markers in a camera image and publishes their poses in the camera frame,
 the observations C_T_Mj of the fiducial estimator, as a tf2_msgs/TFMessage on
 `observations` (one transform per visible marker, stamped with the image time) and on
-/tf for RViz. Subscribes `image_raw` and `camera_info` of the usb_cam node."""
+/tf for RViz. Subscribes `image_raw` of the usb_cam node, wherever it runs. The camera
+calibration comes from the `camera` parameter (a camera_info_manager file), else from
+`camera_info`, else from `nominal_fov`. Every 5 s it logs the image and detection rates."""
 
 import numpy as np
 import rclpy
@@ -12,8 +14,10 @@ from sensor_msgs.msg import CameraInfo, Image
 from tf2_msgs.msg import TFMessage
 from tf2_ros import TransformBroadcaster
 
-from .aruco import Detector, nominal_intrinsics
+from .aruco import Detector, intrinsics_of_file, nominal_intrinsics
 from .estimator_node import quaternion_of
+
+RATE_PERIOD = 5.0
 
 
 class ArucoNode(Node):
@@ -24,10 +28,19 @@ class ArucoNode(Node):
         self.camera_frame = self.declare_parameter("camera_frame", "camera").value
         self.prefix = self.declare_parameter("marker_prefix", "marker_").value
         self.debug = bool(self.declare_parameter("debug_image", False).value)
+        camera = str(self.declare_parameter("camera", "").value)
         # Used when camera_info carries no calibration (k all zero); 0 requires one.
         self.nominal_fov = float(self.declare_parameter("nominal_fov", 0.0).value)
         self.warned_nominal = False
         self.detector = Detector(dictionary, marker_size)
+        self.calibrated_from_file = False
+        if camera:
+            K, dist, size = intrinsics_of_file(camera)
+            self.detector.set_intrinsics(K, dist)
+            self.calibrated_from_file = True
+            self.get_logger().info(f"calibration {camera} for {size[0]} x {size[1]} images")
+        self.images, self.detections, self.rate_time = 0, 0, self.get_clock().now()
+        self.create_timer(RATE_PERIOD, self.log_rates)
         from cv_bridge import CvBridge
 
         self.bridge = CvBridge()
@@ -38,7 +51,17 @@ class ArucoNode(Node):
         self.create_subscription(Image, "image_raw", self.on_image, qos_profile_sensor_data)
         self.get_logger().info(f"{dictionary}, markers of {marker_size} m")
 
+    def log_rates(self):
+        now = self.get_clock().now()
+        dt = max((now - self.rate_time).nanoseconds * 1e-9, 1e-9)
+        self.get_logger().info(f"{self.images / dt:.1f} images/s, "
+                               f"{self.detections / dt:.1f} markers/s"
+                               + ("" if self.detector.K is not None else ", no calibration yet"))
+        self.images, self.detections, self.rate_time = 0, 0, now
+
     def on_info(self, msg):
+        if self.calibrated_from_file:
+            return
         if any(msg.k):
             self.detector.set_intrinsics(msg.k, msg.d)
             return
@@ -59,6 +82,7 @@ class ArucoNode(Node):
     def on_image(self, msg):
         image = self.bridge.imgmsg_to_cv2(msg, desired_encoding="bgr8")
         found = self.detector.detect(image)
+        self.images, self.detections = self.images + 1, self.detections + len(found)
         tfs = []
         for marker_id, T in found.items():
             tf = TransformStamped()
@@ -75,9 +99,7 @@ class ArucoNode(Node):
         if tfs:
             self.broadcaster.sendTransform(tfs)
         if self.debug_pub is not None:
-            cv2 = self.detector.cv2
-            corners, ids, _ = self.detector._detect(image)
-            cv2.aruco.drawDetectedMarkers(image, corners, ids)
+            self.detector.draw(image)
             self.debug_pub.publish(self.bridge.cv2_to_imgmsg(image, encoding="bgr8"))
 
 

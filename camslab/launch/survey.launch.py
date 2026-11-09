@@ -1,6 +1,8 @@
-"""Fiducial surveying on a real car: USB camera, ArUco detection, motion capture pose, the
-estimator, RViz and the web UI. Drive the car by any means (teleop, or live.launch.py's
-controller); settings in config/survey.yaml."""
+"""Fiducial surveying on a real car: the camera node (camera and ArUco detection), the
+motion capture pose, the estimator, RViz and the web UI. Drive the car by any means
+(teleop, or live.launch.py's controller); settings in config/survey.yaml. With
+`camera_host` set, the camera node is uploaded to the car and run there over ssh
+(camslab.car) and everything else runs here."""
 
 import os
 import re
@@ -11,9 +13,10 @@ import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, OpaqueFunction
-from launch.substitutions import LaunchConfiguration
+from launch.actions import ExecuteProcess, OpaqueFunction
 from launch_ros.actions import Node
+
+from camslab import car
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import camslab_settings
@@ -35,38 +38,16 @@ def rviz_config(share, name):
         {"Class": "rviz_default_plugins/TF", "Name": "TF", "Enabled": True,
          "Show Names": True, "Show Axes": True, "Show Arrows": False, "Marker Scale": 0.5,
          "Value": True},
+        {"Class": "rviz_default_plugins/Image", "Name": "preview", "Enabled": True,
+         "Normalize Range": True, "Value": True,
+         "Topic": {"Value": f"/{name}/preview/compressed", **volatile,
+                   "Reliability Policy": "Best Effort"}},
     ]
     out = tempfile.NamedTemporaryFile("w", prefix="camslab_survey_", suffix=".rviz",
                                       delete=False)
     with out:
         yaml.safe_dump(config, out, sort_keys=False)
     return out.name
-
-
-def camera_info_url(settings):
-    """file:// URL of the `camera` calibration: a name in config/cameras/ (the source tree
-    first, as camslab_settings.default_polytope_file, then the installed share) or a path.
-    Empty when `camera` is empty."""
-    camera = str(settings.get("camera") or "")
-    if not camera:
-        return ""
-    if os.sep in camera or camera.endswith(".yaml"):
-        path = os.path.expanduser(camera)
-    else:
-        source = os.path.dirname(camslab_settings.default_polytope_file(__file__))
-        installed = os.path.join(get_package_share_directory("camslab"), "config")
-        candidates = [os.path.join(d, "cameras", f"{camera}.yaml") for d in (source, installed)]
-        path = next((c for c in candidates if os.path.isfile(c)), candidates[0])
-    if not os.path.isfile(path):
-        raise RuntimeError(f"no camera calibration {path}; run `ros2 run camslab calibrate` "
-                           "(docs/hardware-survey.md)")
-    with open(path) as f:
-        calibration = yaml.safe_load(f)
-    size = (int(calibration["image_width"]), int(calibration["image_height"]))
-    if size != (int(settings["image_width"]), int(settings["image_height"])):
-        raise RuntimeError(f"{path} is for {size[0]} x {size[1]} images, the camera is set to "
-                           f"{settings['image_width']} x {settings['image_height']}")
-    return "file://" + os.path.abspath(path)
 
 
 def survey(context):
@@ -77,7 +58,16 @@ def survey(context):
         raise RuntimeError(f"robot name {name!r} must match [a-z][a-z0-9_]*")
     tracker = str(settings["tracker"] or name)
     tracker_ns = re.sub(r"_+", "_", re.sub(r"[^a-zA-Z0-9_]", "_", tracker))
-    camera_frame = f"{name}/camera"
+    calibration = car.camera_file(settings)
+    if settings.get("camera_host"):
+        # The camera node on the car, in the foreground of an ssh session that ends with
+        # the launch; car_node.py is uploaded first.
+        car.upload_node(settings)
+        camera = ExecuteProcess(cmd=car.camera_ssh_command(settings, calibration, batch=True),
+                                name="camera", output="screen")
+    else:
+        camera = Node(package="camslab", executable="car_node", name="camera", output="screen",
+                      arguments=car.node_arguments(settings, calibration))
 
     actions = [
         Node(package="vrpn_mocap", executable="client_node", name="vrpn_mocap_client_node",
@@ -89,20 +79,7 @@ def survey(context):
              remappings=[(f"/vrpn_mocap/{tracker_ns}/pose", f"/{name}/pose")]),
         Node(package="camslab", executable="pose_tf", namespace=name,
              parameters=[{"child_frame": f"{name}/mocap"}]),
-        Node(package="usb_cam", executable="usb_cam_node_exe", name="camera", namespace=name,
-             output="screen",
-             parameters=[{"video_device": str(settings["video_device"]),
-                          "image_width": int(settings["image_width"]),
-                          "image_height": int(settings["image_height"]),
-                          "framerate": float(settings["framerate"]),
-                          "pixel_format": str(settings["pixel_format"]),
-                          "camera_name": "camera", "frame_id": camera_frame,
-                          "camera_info_url": camera_info_url(settings)}]),
-        Node(package="camslab", executable="aruco", namespace=name, output="screen",
-             parameters=[{"marker_size": float(settings["marker_size"]),
-                          "dictionary": str(settings["dictionary"]),
-                          "camera_frame": camera_frame,
-                          "nominal_fov": float(settings.get("nominal_fov", 0.0))}]),
+        camera,
         Node(package="camslab", executable="estimator", namespace=name, output="screen",
              parameters=[os.path.join(share, "config", "fiducial.yaml"),
                          {"estimator": "fiducial", "sensor": "aruco",

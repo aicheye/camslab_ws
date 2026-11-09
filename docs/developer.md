@@ -166,9 +166,11 @@ A batch fit that reaches the truth while the online estimate does not points at 
 selection; a batch Jacobian with a tiny singular value means the track itself does not
 determine a parameter.
 
-On a real car the sensor is `camslab/camslab/aruco_node.py`: ArUco detection with OpenCV
-on the `usb_cam` image, each marker pose published as a transform `marker_<id>` in the
-camera frame on `observations`. The estimator node with `sensor: aruco` pairs those with
+On a real car the sensor is `camslab/camslab/car_node.py`, a self-contained node that
+`camslab.car` uploads to the car and runs there over ssh: it reads the camera with OpenCV,
+detects the ArUco markers and publishes each marker pose as a transform `marker_<id>` in
+the camera frame on `observations`, plus a low-rate JPEG preview (`camslab.aruco_node` is
+the same detector on an `image_raw` topic). The estimator node with `sensor: aruco` pairs those with
 the motion capture pose interpolated to the image time (`camslab.aruco.PoseHistory`) and
 publishes NaN for the errors, since the truth is unknown; the covariance radii are the
 accuracy measure. `survey.launch.py` with `config/survey.yaml` starts the whole chain, see

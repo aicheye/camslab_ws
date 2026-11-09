@@ -52,6 +52,18 @@ def marker_corners(size: float) -> np.ndarray:
     return np.array([[-h, h, 0.0], [h, h, 0.0], [h, -h, 0.0], [-h, -h, 0.0]])
 
 
+def intrinsics_of_file(path: str):
+    """(K, dist, (width, height)) of a camera_info_manager calibration file, the format
+    written by camslab.calibration."""
+    import yaml
+
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    K = np.array(data["camera_matrix"]["data"], float).reshape(3, 3)
+    dist = np.array(data["distortion_coefficients"]["data"], float).reshape(-1)
+    return K, dist, (int(data["image_width"]), int(data["image_height"]))
+
+
 def nominal_intrinsics(width: int, height: int, horizontal_fov_deg: float) -> np.ndarray:
     """A camera matrix for an uncalibrated camera: the focal length from the image width
     and a nominal horizontal field of view, the principal point at the image centre. The
@@ -73,6 +85,7 @@ class Detector:
         self.corners = marker_corners(self.marker_size)
         self.K = None
         self.dist = None
+        self.corners_found, self.ids_found = [], None   # of the last detect(), for drawing
         aruco_dict = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, dictionary))
         if hasattr(cv2.aruco, "ArucoDetector"):
             self.detector = cv2.aruco.ArucoDetector(aruco_dict, cv2.aruco.DetectorParameters())
@@ -89,12 +102,11 @@ class Detector:
 
     def detect(self, image) -> dict:
         """{marker id: C_T_M} for the markers in `image` (grey or BGR). Empty until
-        set_intrinsics() was called."""
-        if self.K is None:
-            return {}
+        set_intrinsics() was called, but corners_found and ids_found are filled anyway."""
         corners, ids, _ = self._detect(image)
+        self.corners_found, self.ids_found = corners, ids
         found = {}
-        if ids is None:
+        if ids is None or self.K is None:
             return found
         for quad, marker_id in zip(corners, ids.reshape(-1)):
             ok, rvec, tvec = self.cv2.solvePnP(self.corners, quad.reshape(4, 2), self.K,
@@ -102,6 +114,11 @@ class Detector:
             if ok:
                 found[int(marker_id)] = marker_pose(rvec, tvec)
         return found
+
+    def draw(self, image) -> None:
+        """Draws the markers of the last detect() on `image` (BGR), in place."""
+        if self.ids_found is not None:
+            self.cv2.aruco.drawDetectedMarkers(image, self.corners_found, self.ids_found)
 
 
 class PoseHistory:

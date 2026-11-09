@@ -5,9 +5,13 @@ a USB camera on the car, ArUco markers in the lab, and the motion capture for th
 pose. It follows the Yahboom ROSMASTER R2 vision guide (Daniel Xie, June 2026) for the
 robot side and replaces its ArUco detector and follower with the surveying pipeline:
 
-    USB camera -> usb_cam -> /<name>/image_raw -> aruco -> /<name>/observations
-    motion capture -> vrpn_mocap -> /<name>/pose
-    observations + pose -> estimator -> /<name>/estimate -> web UI, RViz
+    on the car:   USB camera -> car_node.py (OpenCV, ArUco) -> /<name>/observations, /<name>/preview
+    here:         motion capture -> vrpn_mocap -> /<name>/pose
+                  observations + pose -> estimator -> /<name>/estimate -> web UI, RViz
+
+The car runs one node, which reads the camera, detects the markers and streams their
+poses in the camera frame plus a low-rate JPEG preview; no image stream crosses the
+network. Everything else, the data capture included, runs on your computer.
 
 The estimator identifies the camera extrinsic `X = R_T_C` and the pose of every marker
 while the car drives. Nothing has to be known about the camera mounting or the marker
@@ -25,40 +29,98 @@ placement except the height of at least one marker above the floor.
   ids 0, 1, 2), side 0.14 m, stood up on tripods or taped to walls at a known height. Measure
   the height of each marker's centre above the motion capture floor; the estimator needs
   at least one of them (Assumption 3 of the paper). Keep the markers well separated in
-  angle so that each is seen from more than one heading.
+  angle so that each is seen from more than one heading. `hardware/marker_mounts/` has
+  printable one-piece stands that hold a marker upright, face down toward the car,
+  rolled by 45 degrees, and tilted back and rolled; its README gives the heights and the
+  angles at which the R2's camera sees each.
 
-## Software on the car
+## Software
 
-The ROS 2 side runs where the camera is plugged in. On the Yahboom R2 that is the Jetson's
-Docker container, reached as in the vision guide:
+The car runs only the camera node, `camslab/camslab/car_node.py`. It is one Python file
+with no dependency on this workspace: `ros2 run camslab car` and the launch files copy it
+to `/tmp/camslab_car_node.py` on the car over ssh before every start, so a change here
+reaches the car without a build there. It opens the camera with OpenCV, detects the
+markers in every frame and publishes `observations` (one transform per visible marker in
+the estimator's camera frame, stamped at capture, empty when nothing is seen),
+`camera_info` and `preview/compressed`, a JPEG of the frame at `preview_rate` Hz with the
+detections drawn. The motion capture client, the estimator, RViz and the web UI run on
+your computer, which must be on the car's network and in the same `ROS_DOMAIN_ID` as the
+car (the vision guide uses 32):
 
-    ssh jetson@192.168.1.119
-    docker exec -it yahboom_robot bash
-    source /opt/ros/humble/setup.bash
     export ROS_DOMAIN_ID=32
 
-Install the camera driver and the OpenCV bindings inside the container:
+On the car, the node needs `python3` with `rclpy`, `numpy` and OpenCV with the aruco
+module in its ROS environment. On the Yahboom R2 that is the Jetson's `yahboom_robot`
+Docker container (user `jetson`); Ubuntu's OpenCV package has aruco, so once, inside it:
 
-    apt update
-    apt install ros-humble-usb-cam ros-humble-cv-bridge ros-humble-vrpn-mocap \
-        python3-opencv
+    apt update && apt install python3-opencv python3-numpy
 
-Clone this repository into a workspace and build the two Python packages:
+Here, build the workspace with `camslab` and `camslab_webui` ({doc}`install`), set
+`camera_host` in `camslab/config/survey.yaml` to the car's `user@address` (`container`
+and `ros_distro` name its container and ROS release), and check the way to the car:
 
-    cd ~/ws/src && git clone <camslab repository>
-    cd ~/ws && colcon build --symlink-install --packages-select camslab camslab_webui
-    source install/setup.bash
+    ros2 run camslab car setup
 
-The motion capture client, RViz and the web UI can also run on a lab PC in the same
-`ROS_DOMAIN_ID`; only `usb_cam` and `aruco` have to be on the car.
+When a car's address is unknown (no display on the car),
+
+    ros2 run camslab car find
+
+scans the `/24` of `camera_host` (or `--subnet 192.168.1.0/24`) for hosts with ssh and
+prints, for each, whether its ssh host key is the car image's (every car is flashed from
+the same image, so they all share it), whether the login works, and its hostname and
+Jetson serial number. The serial tells identical cars apart; unplugging one does too.
+
+It accepts the car's ssh host key and installs this computer's ssh key on the car (asks
+the car's password once), then checks the container, ROS, the Python modules, that the
+node uploads and runs, the camera device, that the configured pixel format and image size
+are among the camera's formats, and the car's clock. The clock matters: the observations
+are stamped by the car and the motion capture poses by this computer, and the estimator
+pairs them by time, so an offset above 20 ms fails the check. Sync the Jetson with
+chrony or NTP against this computer, or for one session `sudo date -s "$(date)"` over
+ssh. Fix any `FAIL` line it prints and run it again. Run it once for every car, and again
+for a car at a new address: `camera` and `calibrate` run over ssh without a terminal, so
+they stop at once, instead of waiting for images, when the car would prompt. Every `car`
+command and the launch files read `config/survey.yaml`; a value is overridden on the
+command line as `name:=yahboom1`.
+
+To see the camera alone,
+
+    ros2 run camslab car camera
+
+uploads and starts the camera node on the car in the foreground and prints, every 2 s,
+the preview and observation rates received here and the markers seen. Ctrl-C stops both
+ends.
+
+## Checking the camera streaming in RViz
+
+Before a survey, with the car on and a marker at hand:
+
+    ros2 launch camslab camera_test.launch.py
+
+starts the camera node on the car (or here, with `camera_host` empty), the
+`observation_markers` node and RViz with the camera frame fixed at the origin. RViz shows
+the car's preview image and, for every marker the car sees, a flat square of the marker's
+size at its observed pose with its id and distance; the terminal logs the same once a
+second. Hold a marker in front of the camera and check:
+
+1. The square appears where the marker is relative to the camera: ahead is +x, left is
+   +y, up is +z, and the label's distance is the tape-measure distance from the lens to
+   the marker centre to within a few centimetres. A distance off by a constant factor
+   means a wrong `marker_size` or `camera` calibration.
+2. The square tilts with the marker.
+3. The preview runs at `preview_rate` and the observation rate in the terminal is the
+   camera's frame rate. The car node logs its detection time per frame; it must stay
+   below the frame period.
+
+No motion capture is needed for this check.
 
 ## Camera calibration
 
 ArUco pose estimation needs the camera matrix and the distortion coefficients. The lab
-calibrates with its tag grid board: 6 x 6 square tags of 8.8 cm, 2.64 cm apart (a Kalibr
-AprilGrid). The calibration tool finds the tag dictionary and the order of the ids on the
-board from the first images, so it needs only the grid size, the tag side and the gap,
-which are its defaults.
+calibrates with its AprilTag board: a 6 x 6 grid of 36 AprilTag 36h11 tags, ids 0 to 35,
+tags of 8.8 cm with 2.64 cm between them (a Kalibr AprilGrid). The tool finds the width
+of the tags' black border and the order of the ids on the board from the first images;
+another 36h11 grid needs only `--cols`, `--rows`, `--tag` and `--spacing` (metres).
 
 Calibrations are shared through the repository. `camslab/config/cameras/` holds one file
 per camera model and image size, and `camera` in `config/survey.yaml` names one of them.
@@ -69,39 +131,53 @@ percent in focal length; calibrate a car's own camera under a new name when that
 Check `ls camslab/config/cameras/` first. If the camera is there, set `camera` and skip to
 {ref}`settings`. Otherwise:
 
-1. Stop `survey.launch.py` if it runs, because `usb_cam` holds the camera. In the car's
-   container, at the resolution of `config/survey.yaml`, run
+1. Stop `survey.launch.py` if it runs, because the camera node holds the camera.
+2. Run
 
-       ros2 run camslab calibrate --name yahboom_r2_640x480 \
-           --device /dev/video0 --width 640 --height 480
+       ros2 run camslab car calibrate --name yahboom_r2_640x480
 
-   The name is `<camera model>_<width>x<height>`.
-2. Hold the board in front of the camera and move it slowly: near enough to fill most of
+   It starts the camera node on the car with detection off and every frame streamed as
+   JPEG (quality 95), subscribes to them here and opens a window with the camera image,
+   the tag corners it finds and the image rate. The terminal shows the same status
+   and one line per kept view. The name is `<camera model>_<width>x<height>`.
+3. Hold the board in front of the camera and move it slowly: near enough to fill most of
    the image and far enough to see the whole board, in each corner and along each edge of
-   the image, and tilted by 20 to 45 degrees in both directions. Keep it flat. The tool
-   first prints the tag dictionary and the id layout it found, then a line per kept view;
-   it keeps a view only when it differs from the ones it already has and stops at 30. It
-   warns when fewer than 5 views are tilted, because the focal length needs them. Add
-   `--show` on a machine with a display to see the detected corners.
-3. Read the result. A reprojection error below 0.5 px is good; above 1 px means a bent
-   board or blurred images, so repeat. The tool writes
-   `camslab/config/cameras/<name>.yaml` in the source tree (with `colcon build
-   --symlink-install`; otherwise in the current directory).
-4. Set `camera: <name>` in `config/survey.yaml` and commit the new file:
+   the image, flat and tilted by 20 to 45 degrees toward each side. Keep it flat. It keeps
+   a view only when it differs from the ones it already has, and it is done when the
+   board has been seen in each of nine areas of the image, twice each far, mid and near,
+   and twice each flat and tilted left, right, up and down, with 20 views at least. The
+   window shows the nine areas in its top right corner, filled as they are covered, and a
+   `need:` line with what is still missing, which the terminal repeats. Press `c` in the
+   window to calibrate with the views so far (5 at least) and `q` to give up. It warns
+   when fewer than 5 views are tilted, because the focal length needs them.
+4. Read the result. A reprojection error below 0.5 px is good; above 1 px means a bent
+   board or blurred images, so repeat. The pictures in `~/camslab_calibration/<name>/`
+   open by themselves:
+   - `before_after.png`: the view nearest the camera, as recorded and undistorted with the
+     new calibration. The board edges and the tag rows are straight on the right.
+   - `distortion_map.png`: how far undistortion moves each pixel. The colour and the white
+     contours give the distance in pixels, the arrows its direction, and the cross marks
+     the principal point. Arrows pointing outward at the corners are barrel distortion,
+     usual for a wide-angle webcam; inward is pincushion.
+5. The tool copies the calibration to `camslab/config/cameras/<name>.yaml` and sets
+   `camera: <name>` in `config/survey.yaml`. Commit the file so that every car with this
+   camera uses it.
 
-       git add camslab/config/cameras/<name>.yaml && git commit -m "Calibrate <name>"
+`--no-camera` calibrates from a camera that already streams on `preview/compressed` or
+`image_raw/compressed`, for instance a `usb_cam` started by hand. Without a display the
+window is skipped and `latest.png` in the report directory is refreshed every 2 s
+instead. To redo a calibration from saved frames, record them with `--save views/` and
+run `ros2 run camslab calibrate --name <name> --images views/`; the same tool calibrates
+a camera plugged into this computer with `--device /dev/video0`.
 
-`survey.launch.py` refuses to start when the file's image size differs from
-`image_width` and `image_height`, because the intrinsics scale with the resolution.
-To redo a calibration from saved frames, record them with `--save views/` and run
-`ros2 run camslab calibrate --name <name> --images views/`. Another grid board needs
-`--cols`, `--rows`, `--tag` and `--spacing` (metres).
+`survey.launch.py` refuses to start when the file's image size differs from `image_width`
+and `image_height`, because the intrinsics scale with the resolution.
 
 ### Skipping the calibration
 
 To run the chain before a calibration exists, leave `camera` empty and set
 `nominal_fov` in `config/survey.yaml` to the camera's horizontal field of view in degrees
-(60 for a typical webcam). The `aruco` node then builds the camera matrix from the image
+(60 for a typical webcam). The camera node then builds the camera matrix from the image
 size and that angle, with no distortion, and warns once at startup. Detection and the
 marker directions are fine; every marker distance is scaled by the ratio of the true focal
 length to the nominal one, so the estimated camera position and marker positions carry the
@@ -116,10 +192,12 @@ calibration is reported instead of guessed.
 | Key | Meaning |
 |---|---|
 | `name`, `tracker`, `mocap_server` | the car's namespace, its rigid body name and the motion capture server, as in {doc}`configuration` |
+| `camera_host`, `container`, `ros_distro` | the car as `user@address`, its ROS container and release; the camera node is uploaded and started there over ssh. Empty `camera_host`: the camera node runs on this computer |
 | `video_device`, `image_width`, `image_height`, `framerate`, `pixel_format` | the camera, as `v4l2-ctl --list-formats-ext` reports it |
 | `camera` | the calibration: a name in `config/cameras/` or a path to a file |
 | `nominal_fov` | horizontal field of view [deg] used while `camera` is empty; 0 requires a calibration |
 | `camera_delay` | image latency [s]; the robot pose is taken this long before the image stamp |
+| `preview_rate` | JPEG frames per second streamed from the car for RViz and `car status --show`; 0 for none |
 | `dictionary`, `marker_size`, `marker_ids` | the printed markers |
 | `marker_height`, `marker_height_known` | the centre heights above the floor and which of them the estimator may use |
 
@@ -129,23 +207,30 @@ The estimator gains and pair-selection thresholds stay in `config/fiducial.yaml`
 
     ros2 launch camslab survey.launch.py
 
-This starts `usb_cam`, `aruco`, `vrpn_mocap`, `pose_tf`, the estimator with
-`sensor: aruco`, RViz and the web UI on <http://127.0.0.1:8000>. Drive the car with the
-teleop of its driver or with {doc}`running`'s controller on a path with straight stretches
-(gerono, or a bowtie at least 2 m wide): the camera orientation needs both pure
-translations and turns, see {doc}`fiducial-hints`.
+This uploads and starts the camera node on the car over ssh (with the intrinsics of
+`camera` on its command line) and, here, `vrpn_mocap`, `pose_tf`, the estimator with
+`sensor: aruco`, RViz with the preview image and the web UI on <http://127.0.0.1:8000>. Drive the car with the teleop of its driver or with
+{doc}`running`'s controller on a path with straight stretches (gerono, or a bowtie at
+least 2 m wide): the camera orientation needs both pure translations and turns, see
+{doc}`fiducial-hints`.
 
-Check in order:
+Watch the chain in a second terminal:
 
-1. `ros2 topic hz /<name>/image_raw` runs at the camera rate, and
-   `ros2 topic echo /<name>/camera_info --once` shows a non-zero `k` matrix.
-2. `ros2 topic echo /<name>/observations` lists one transform per visible marker, named
-   `marker_<id>`. RViz draws them as TF frames hanging off `<name>/camera`; a marker
-   straight ahead of the camera has a positive x.
-3. `/<name>/pose` arrives at 100 Hz and the TF frame `<name>/mocap` moves with the car.
-4. The web UI's camera panel shows the two camera errors as NaN (the truth is unknown)
-   and the dashed covariance radii appear once the laws switch on. The RViz text above the
-   car shows the same radii, prefixed `r`.
+    ros2 run camslab car status --show
+
+It redraws the rates twice a second and, with `--show`, opens the car's preview with the
+markers it found and their distances. Check, from the top line down:
+
+1. `preview` runs at `preview_rate`, `observations` at the camera rate, and
+   `camera_info` says `fx ...`, not `uncalibrated`.
+2. `seen` lists one marker per visible fiducial with its distance; in RViz they are TF
+   frames `marker_<id>` hanging off `<name>/camera`, and a marker straight ahead of the
+   camera has a positive x.
+3. `pose` arrives at 100 Hz with the mocap position and yaw, and the TF frame
+   `<name>/mocap` moves with the car.
+4. `estimate` arrives and the web UI's camera panel shows the two camera errors as NaN
+   (the truth is unknown) and the dashed covariance radii appear once the laws switch on.
+   The RViz text above the car shows the same radii, prefixed `r`.
 
 The estimate is the first six values of `/<name>/estimate`: the Cayley vector `x` of the
 camera orientation and `t_X`, the camera position in the robot frame. The marker poses
@@ -169,6 +254,9 @@ Record a run with `ros2 bag record /<name>/pose /<name>/observations /<name>/est
 ## Frames
 
 OpenCV's optical frame has z forward, x right and y down. The estimator's camera frame has
-x forward and z up like the robot frame, so `camslab.aruco.marker_pose` rotates every
-observation by `OPTICAL_TO_BODY` before it is published; the extrinsic `X` is estimated for
-that frame. The marker frame is OpenCV's: x and y in the marker plane, z out of it.
+x forward and z up like the robot frame, so the camera node rotates every observation by
+`OPTICAL_TO_BODY` before it is published (the same constant as `camslab.aruco`, which the
+tests keep equal); the extrinsic `X` is estimated for that frame. The marker frame is
+OpenCV's: x and y in the marker plane, z out of it. `camslab.aruco_node` is the same
+detector as a subscriber to an `image_raw` topic, for a recorded image stream or a camera
+driver that already runs.

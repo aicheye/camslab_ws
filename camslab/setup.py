@@ -26,7 +26,7 @@ setup(
         *[entry for d in ("launch", "config", "models", "rviz", "urdf", "worlds")
           if os.path.isdir(d) for entry in tree(d)],
     ],
-    install_requires=["setuptools", "numpy", "scipy"],
+    install_requires=["setuptools", "numpy", "scipy", "pyyaml"],
     zip_safe=True,
     maintainer="Sean Yang",
     maintainer_email="seanxxyang@gmail.com",
@@ -38,7 +38,10 @@ setup(
             "pose_tf = camslab.pose_tf:main",
             "estimator = camslab.estimator_node:main",
             "aruco = camslab.aruco_node:main",
+            "car_node = camslab.car_node:main",
+            "observation_markers = camslab.observation_markers:main",
             "calibrate = camslab.calibration:main",
+            "car = camslab.car:main",
         ],
     },
 )

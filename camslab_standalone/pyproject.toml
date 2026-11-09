@@ -12,7 +12,10 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = ["pytest"]
+dev = [
+    "opencv-python-headless>=5.0.0.93",
+    "pytest",
+]
 
 [tool.uv.sources]
 camslab = { path = "../camslab", editable = true }
