@@ -36,7 +36,9 @@ and Gazebo dependencies inside a container.
 After pulling changes, repeat step 4.
 
 ```{tip}
-Add `source /opt/ros/humble/setup.bash` to `~/.bashrc` to source ROS automatically in new terminals.
+Add `source /opt/ros/humble/setup.bash` to `~/.bashrc` to source ROS automatically in new
+terminals. In zsh, source the `setup.zsh` files instead: the `.bash` ones fail with
+`no such file or directory: .../local_setup.sh`.
 ```
 
 Verify the build before launching:

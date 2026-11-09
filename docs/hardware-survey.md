@@ -50,6 +50,9 @@ car (the vision guide uses 32):
 
     export ROS_DOMAIN_ID=32
 
+Put that line, and the sourcing of `/opt/ros/humble/setup.<shell>` and
+`install/setup.<shell>`, in your shell's startup file once, so every terminal has them.
+
 On the car, the node needs `python3` with `rclpy`, `numpy`, OpenCV with the aruco
 module and the `aruco_msgs` package in its ROS environment. On the Yahboom R2 that is the
 Jetson's `yahboom_robot` Docker container (user `jetson`), which ships with OpenCV 4.8
