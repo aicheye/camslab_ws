@@ -96,6 +96,16 @@ def test_detector_recovers_a_rendered_marker_pose():
     assert not np.array_equal(drawn, cv2.cvtColor(image, cv2.COLOR_GRAY2BGR))
 
 
+def test_only_the_configured_ids_are_kept():
+    cv2 = pytest.importorskip("cv2")
+    K = aruco.nominal_intrinsics(640, 480, 60.0)
+    image = render(cv2, K, np.zeros(5), 7, 0.14, np.diag([1.0, -1.0, -1.0]), np.array([0.0, 0.0, 1.0]))
+    assert list(car_node.Detector("DICT_4X4_50", 0.14, K, np.zeros(5)).detect(image)) == [7]
+    kept = car_node.Detector("DICT_4X4_50", 0.14, K, np.zeros(5), ids=[0, 1, 2]).detect(image)
+    assert kept == {}
+    assert car_node.parse_args(["--name", "a", "--ids", "0", "1"]).ids == [0, 1]
+
+
 def test_no_calibration_gives_ids_only():
     cv2 = pytest.importorskip("cv2")
     K = aruco.nominal_intrinsics(640, 480, 60.0)

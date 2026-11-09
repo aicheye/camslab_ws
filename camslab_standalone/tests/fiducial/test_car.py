@@ -39,8 +39,10 @@ def test_settings_overrides_are_parsed_as_yaml(tmp_path):
 
 def test_camera_node_command_carries_the_settings_and_the_calibration(monkeypatch, tmp_path):
     monkeypatch.setenv("ROS_DOMAIN_ID", "32")
-    settings = {**SETTINGS, "dictionary": "DICT_4X4_50", "marker_size": 0.14, "preview_rate": 2.0}
+    settings = {**SETTINGS, "dictionary": "DICT_4X4_50", "marker_size": 0.14, "preview_rate": 2.0,
+                "marker_ids": [0, 1, 2, 3]}
     command = car.node_command(settings)
+    assert "--ids 0 1 2 3 " in command
     assert command.startswith("pkill -INT -f '^python3 /tmp/camslab_car_node.py' && sleep 1; exec "
                               "python3 /tmp/camslab_car_node.py --name angostura --device /dev/video0 ")
     assert "--pixel-format yuyv" in command and "--fx" not in command and "--draw" in command

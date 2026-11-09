@@ -34,7 +34,9 @@ OPTICAL_TO_BODY = np.array([[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]]
 FOURCC = {"yuyv": "YUYV", "mjpeg": "MJPG", "uyvy": "UYVY"}
 RATE_PERIOD = 5.0
 INFO_PERIOD = 1.0
-GRAB_FAILURES = 30          # consecutive failed grabs before the node gives up
+GRAB_FAILURES = 30          # consecutive failed grabs before the camera is reopened
+REOPEN_PERIOD = 2.0         # seconds between attempts to reopen a lost camera
+REOPEN_TIMEOUT = 30.0       # seconds of attempts before the node gives up
 
 
 def parse_args(argv=None):
@@ -51,6 +53,9 @@ def parse_args(argv=None):
     p.add_argument("--pixel-format", default="yuyv", help="yuyv, mjpeg or uyvy")
     p.add_argument("--dictionary", default="DICT_4X4_50", help="cv2.aruco dictionary name")
     p.add_argument("--marker-size", type=float, default=0.14, help="printed side [m]")
+    p.add_argument("--ids", type=int, nargs="*", default=[],
+                   help="publish only these marker ids; empty: all. Texture decodes as a "
+                        "random id of a 4x4 dictionary now and then, so the lab's ids only")
     p.add_argument("--fx", type=float, default=0.0)
     p.add_argument("--fy", type=float, default=0.0)
     p.add_argument("--cx", type=float, default=0.0)
@@ -121,12 +126,13 @@ class Detector:
     {id: (R, t)} in the estimator's camera frame; corners and ids of the last frame stay
     on the object for draw()."""
 
-    def __init__(self, dictionary, marker_size, K=None, dist=None):
+    def __init__(self, dictionary, marker_size, K=None, dist=None, ids=()):
         import cv2
 
         self.cv2 = cv2
         self.corners = marker_corners(marker_size)
         self.K, self.dist = K, dist
+        self.ids = set(int(i) for i in ids)         # empty: every id
         self.found_corners, self.found_ids = [], None
         aruco_dict = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, dictionary))
         if hasattr(cv2.aruco, "ArucoDetector"):
@@ -137,6 +143,10 @@ class Detector:
 
     def detect(self, image):
         corners, ids, _ = self._detect(image)
+        if ids is not None and self.ids:
+            keep = [i for i, marker_id in enumerate(ids.reshape(-1)) if int(marker_id) in self.ids]
+            corners = tuple(corners[i] for i in keep)
+            ids = ids[keep] if keep else None
         self.found_corners, self.found_ids = corners, ids
         found = {}
         if ids is None or self.K is None:
@@ -212,7 +222,7 @@ def run(args):
         log.error(str(e))
         return 2
     K, dist = calibration if calibration is not None else (None, None)
-    detector = Detector(args.dictionary, args.marker_size, K, dist) if args.detect else None
+    detector = Detector(args.dictionary, args.marker_size, K, dist, args.ids) if args.detect else None
     observations_pub = node.create_publisher(TFMessage, "observations", 10)
     info_pub = node.create_publisher(CameraInfo, "camera_info", qos_profile_sensor_data)
     preview_pub = node.create_publisher(CompressedImage, "preview/compressed",
@@ -227,6 +237,7 @@ def run(args):
         info.p = [float(v) for v in np.hstack([K, np.zeros((3, 1))]).reshape(-1)]
     log.info(f"{args.device} {args.width}x{args.height} @ {args.fps:g} fps {args.pixel_format}, "
              + (f"{args.dictionary}, markers of {args.marker_size} m, "
+                f"{'ids ' + ' '.join(map(str, args.ids)) if args.ids else 'all ids'}, "
                 f"{'calibrated' if args.fx > 0 else f'{args.fov:.0f} deg fov'}" if args.detect
                 else "no detection")
              + f", preview {args.preview_rate:g} Hz" + (" drawn" if args.draw else ""))
@@ -238,10 +249,30 @@ def run(args):
         while rclpy.ok():
             if not cap.grab():
                 failures += 1
-                if failures >= GRAB_FAILURES:
-                    log.error(f"camera {args.device} stopped giving frames")
-                    return 1
-                time.sleep(0.05)
+                if failures < GRAB_FAILURES:
+                    time.sleep(0.05)
+                    continue
+                # The camera dropped off the bus (a loose cable, a USB reset): reopen it
+                # while it comes back, and give up after REOPEN_TIMEOUT.
+                log.warning(f"camera {args.device} stopped giving frames; reopening")
+                cap.release()
+                lost = time.monotonic()
+                while True:
+                    time.sleep(REOPEN_PERIOD)
+                    try:
+                        cap = open_camera(args.device, args.width, args.height, args.fps,
+                                          args.pixel_format)
+                        log.info(f"camera {args.device} is back")
+                        break
+                    except RuntimeError as e:
+                        if time.monotonic() - lost > REOPEN_TIMEOUT:
+                            log.error(f"{e}; giving up after {REOPEN_TIMEOUT:.0f} s. Check "
+                                      "the USB cable and `ls /dev/video*` on the car")
+                            return 1
+                    rclpy.spin_once(node, timeout_sec=0.0)
+                    if not rclpy.ok():
+                        return 0
+                failures = 0
                 continue
             failures = 0
             stamp = node.get_clock().now().to_msg()

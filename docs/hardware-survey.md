@@ -203,7 +203,7 @@ calibration is reported instead of guessed.
 | `nominal_fov` | horizontal field of view [deg] used while `camera` is empty; 0 requires a calibration |
 | `camera_delay` | image latency [s]; the robot pose is taken this long before the image stamp |
 | `preview_rate` | JPEG frames per second streamed from the car for RViz and `car status --show`; 0 for none |
-| `dictionary`, `marker_size`, `marker_ids` | the printed markers |
+| `dictionary`, `marker_size`, `marker_ids` | the printed markers; the camera node publishes only these ids, because floor and shelf texture decodes as a random id of a 4x4 dictionary now and then |
 | `marker_height`, `marker_height_known` | the centre heights above the floor and which of them the estimator may use |
 
 The estimator gains and pair-selection thresholds stay in `config/fiducial.yaml`.

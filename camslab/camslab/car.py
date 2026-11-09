@@ -123,6 +123,8 @@ def node_arguments(settings: dict, calibration_file: str = "", detect: bool = Tr
             "--pixel-format", str(settings["pixel_format"]),
             "--dictionary", str(settings["dictionary"]),
             "--marker-size", f"{float(settings['marker_size']):g}"]
+    if settings.get("marker_ids"):
+        args += ["--ids", *[str(int(i)) for i in settings["marker_ids"]]]
     if calibration_file:
         from .aruco import intrinsics_of_file
 

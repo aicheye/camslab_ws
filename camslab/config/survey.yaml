@@ -34,14 +34,16 @@ nominal_fov: 60.0                # without a calibration: horizontal field of vi
 camera_delay: 0.05               # image latency: the pose is taken this long before the stamp [s]
 preview_rate: 2.0                # JPEG frames per second streamed from the car on preview/compressed
 
-# Markers: cv2.aruco dictionary, printed side [m], the ids in the lab, and the height of
-# each marker's centre above the mocap floor [m]; only the heights flagged known reach the
-# estimator (at least one must be known, Assumption 3 of the paper).
+# Markers: cv2.aruco dictionary, printed side [m], the ids in the lab (the camera node
+# publishes only these; hardware/marker_mounts/markers.pdf prints ids 0 to 3), and the
+# height of each marker's centre above the mocap floor [m]; only the heights flagged known
+# reach the estimator (at least one must be known, Assumption 3 of the paper). Measure the
+# heights once the stands are placed (hardware/marker_mounts/README.md has the nominal ones).
 dictionary: DICT_4X4_50
 marker_size: 0.14
-marker_ids: [0, 1, 2]
-marker_height: [0.30, 0.30, 0.30]
-marker_height_known: [true, true, false]
+marker_ids: [0, 1, 2, 3]
+marker_height: [0.10, 0.09, 0.14, 0.13]
+marker_height_known: [true, true, true, false]
 
 rviz: true
 webui: true                      # web UI on `port`
