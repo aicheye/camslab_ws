@@ -270,6 +270,7 @@ calibration is reported instead of guessed.
 | `dictionary`, `marker_size`, `marker_ids` | the printed markers; the camera node publishes only these ids, because floor and shelf texture decodes as a random id of a 4x4 dictionary now and then |
 | `min_marker_pixels`, `ambiguity_ratio` | which detections become observations: the shortest side in the image [px] and the ratio of the two pose solutions' reprojection errors; 0 switches a check off |
 | `marker_height`, `marker_height_known` | the centre heights above the floor and which of them the estimator may use |
+| `stands` | where the stands are planned to stand, one per marker: the stand, x, y [m] and the facing direction [deg]. Only the rehearsal reads it |
 
 The estimator gains and pair-selection thresholds stay in `config/fiducial.yaml`.
 
@@ -281,9 +282,11 @@ This uploads and starts the camera node on the car over ssh (with the intrinsics
 `camera` on its command line) and, here, `vrpn_mocap`, `pose_tf`, the estimator with
 `sensor: aruco`, RViz with the preview image and the web UI on <http://127.0.0.1:8000>.
 With `drive: true` it also starts the path controller and the command relay on the car,
-see [Driving and safety](#driving-and-safety). The path needs straight stretches and
-turns (gerono, or a bowtie at least 2 m wide): the camera orientation needs both pure
-translations and turns, see `docs/fiducial-hints.md`.
+see [Driving and safety](#driving-and-safety). The path is the bowtie of `survey.yaml`
+and the stands go where [Rehearsal and stand layout](#rehearsal-and-stand-layout) puts
+them: the camera orientation needs both pure translations and turns
+(`docs/fiducial-hints.md`), and with the real camera's limits a gerono gives no pure
+translation.
 
 Watch the chain in a second terminal:
 
@@ -364,9 +367,77 @@ Before the first drive of a car, and after a change of its driver:
 5. Set the safe area in the web UI after every motion capture calibration, then drive the
    first lap with a hand near the car.
 
-The default path of `survey.yaml` is a gerono of 4.0 m by 2.0 m with a lap of 60 s: it
-peaks at 0.30 m/s, 0.33 rad/s and a curvature of 2.4 1/m. A gerono with `a` below 1.66 m
-is tighter than the R2's steering limit of 2.9 1/m.
+The default path of `survey.yaml` is a bowtie of 4.0 m by 2.0 m with a lap of 80 s. It
+is 0.14 m/s on the straight edges, and its corners are arcs at the R2's steering limit of
+2.9 1/m, driven at 0.42 rad/s.
+
+## Rehearsal and stand layout
+
+The simulated camera of `docs/fiducial-hints.md` sees every marker at any distance. The
+real one accepts a marker only within about 2.4 m, inside its 63 degree view, facing it
+([Which images are used](#which-images-are-used)), so each marker is in use on a few
+stretches of the path only. The estimator needs, of the same marker and within 4 m of
+travel, two images at the same heading 0.2 m apart (a pure-translation pair) and two
+images at headings 30 degrees or more apart (a rotation pair). Whether it gets them
+depends on the path and on where the stands are.
+
+    cd camslab_standalone
+    uv run python -m camslab_standalone.fiducial.rehearsal
+
+runs the simulator with the real camera's acceptance rule, the calibration `camera`,
+`max_yaw_rate`, a measurement noise of 13 mm and 0.7 degrees, the path of the
+`controller` block and the planned stands of `stands` in `survey.yaml`. It prints the
+images used per marker, the pairs stored, whether the two adaptive laws switch on and
+the errors after each lap, and it draws the floor plan. Run it again after moving a
+stand or changing the path.
+
+```{image} images/survey-layout.png
+:alt: Floor plan of the bowtie with one marker stand beyond each corner and the stretches of the path on which each marker is in use
+```
+
+What the rehearsal showed for the lab's camera:
+
+- On a gerono no marker gives a pure-translation pair, because the heading never repeats
+  while the marker is in view. The orientation law stays off and the camera's
+  orientation is not identified. The bowtie's straight edges give the pure-translation
+  pairs and its corners the rotation pairs.
+- The stands go beyond the corners of the bowtie, facing back along the edge that leads
+  to them. The two at the diagonals' ends give pure-translation pairs, the two below
+  the short sides also give rotation pairs:
+
+  | Marker | Stand | x [m] | y [m] | Facing [deg] |
+  |---|---|---|---|---|
+  | 0 | upright | -0.75 | 1.95 | -30 |
+  | 1 | overhang | 4.75 | 1.70 | -150 |
+  | 2 | diamond | -0.50 | -0.80 | 120 |
+  | 3 | faceup | 4.50 | -1.05 | 120 |
+
+  The positions are in motion capture coordinates for a bowtie centred at (2, 1) with
+  `theta0: 0`; facing is the direction of the marker's normal on the floor. A stand
+  misplaced by 0.15 m and 10 degrees still works.
+- With this layout both laws are on by the end of the first lap. After four laps
+  (320 s) the camera orientation error is 0.005 to 0.012, the camera position error 16
+  to 31 mm and the marker position error 25 to 48 mm over three noise seeds.
+- A safe area with the corners (-0.25, -0.05), (4.25, -0.05), (4.25, 2.05) and
+  (-0.25, 2.05) holds the path with the 0.2 m margin and leaves every stand 0.5 m or
+  more outside.
+- A marker's orientation is estimated in Cayley coordinates, which are singular for a
+  rotation by 180 degrees from the world frame. Each stand has a range of facings near
+  it, roughly toward +y, which the rehearsal flags:
+
+  | Stand | Do not face it between [deg] |
+  |---|---|
+  | upright | 48 and 132 |
+  | overhang | 28 and 152 |
+  | diamond | 3 and 87 |
+  | faceup | 24 and 96 |
+
+The rehearsal does not model lens distortion, markers hiding each other, or the
+ambiguity check. Its car follows the path within 3 mm. With the turning rate disturbed
+so that the heading wanders by 2 or by 4 degrees rms around the path, the errors after
+four laps stay in the same range (25 and 41 mm for the marker positions). The camera's
+height of 0.12 m is from `hardware/marker_mounts/README.md`; its position 0.20 m ahead
+of the rear axle is assumed.
 
 ## Ground truth
 

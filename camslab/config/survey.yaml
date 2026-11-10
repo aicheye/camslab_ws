@@ -51,6 +51,17 @@ min_marker_pixels: 30.0
 ambiguity_ratio: 2.0
 marker_height: [0.10, 0.09, 0.14, 0.13]
 marker_height_known: [true, true, true, false]
+# Where the stands are planned to stand, one per marker id: the stand of
+# hardware/marker_mounts, its position [m] and the direction its marker faces [deg] in
+# motion capture coordinates. Only the rehearsal reads this
+# (`uv run python -m camslab_standalone.fiducial.rehearsal`); the survey estimates the
+# poses. One stand beyond each corner of the bowtie, 0.75 m or more from the path. Move
+# them with x0, y0 and theta0 when the path moves.
+stands:
+  - {stand: upright, x: -0.75, y: 1.95, facing: -30}
+  - {stand: overhang, x: 4.75, y: 1.70, facing: -150}
+  - {stand: diamond, x: -0.50, y: -0.80, facing: 120}
+  - {stand: faceup, x: 4.50, y: -1.05, facing: 120}
 
 # Driving. With drive true the path controller runs on this computer, disabled until
 # Start is pressed in the web UI, where the path and the safe area are set too. Its
@@ -62,16 +73,21 @@ drive: true
 driver_cmd_vel: /cmd_vel         # the Twist topic the car's driver listens on (`ros2 topic list` on the car)
 command_timeout: 0.5             # the relay stops the car when the newest command is older [s]
 
-# Controller parameters for the survey, on top of params.yaml. A path needs straight
-# stretches and turns (gerono or bowtie, docs/fiducial-hints.md); this gerono peaks at
-# 0.30 m/s, 0.33 rad/s (under max_yaw_rate for the whole lap) and a curvature of
-# 2.4 1/m, under kappa_max. With a below 1.66 m the car cannot steer through its loops.
-# v_max and w_max are also the relay's limits on the car.
+# Controller parameters for the survey, on top of params.yaml. The path is a bowtie: its
+# straight edges give the pure-translation pairs and its corners the rotation pairs. With
+# the real camera's limits a gerono gives no pure-translation pair, because the heading
+# never repeats while a marker is in view (docs/hardware-survey.md, "Rehearsal"). A lap
+# of 80 s is 0.14 m/s and 0.42 rad/s in the corners, under max_yaw_rate, so the images
+# of the corners are used. v_max and w_max are also the relay's limits on the car.
 controller:
-  kappa_max: 2.9                 # the R2's steering limit [1/m]
-  shape: gerono
-  a: 2.0                         # half the long axis [m]; the lap is 4.0 m by 2.0 m around (x0, y0)
-  period: 60.0                   # [s]
+  kappa_max: 2.9                 # the R2's steering limit [1/m]; the corners are arcs of this curvature
+  shape: bowtie
+  x0: 2.0                        # centre [m]
+  y0: 1.0
+  theta0: 0.0
+  a: 2.0                         # half the long side [m]: corners at (x0 +- a, y0 +- b)
+  b: 1.0                         # half the short side [m]
+  period: 80.0                   # [s]
   v_max: 0.4                     # [m/s]
   w_max: 2.0                     # [rad/s]
 

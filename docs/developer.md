@@ -24,6 +24,7 @@ and the ROS nodes run the same control law, trajectories, and estimators.
 | Mass-spring-damper estimation | `uv run python -m camslab_standalone.msd` | `tests/msd` |
 | Circular path identification | `uv run python -m camslab_standalone.path_circle` | `tests/path_circle` |
 | Fiducial surveying study | `uv run python -m camslab_standalone.fiducial` | `tests/fiducial` |
+| Rehearsal of a hardware survey with the real camera's limits | `uv run python -m camslab_standalone.fiducial.rehearsal` | `tests/fiducial/test_rehearsal.py` |
 
 `common/unicycle.py` holds the unicycle plant and the command clamp.
 
