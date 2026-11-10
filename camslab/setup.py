@@ -38,6 +38,7 @@ setup(
             "pose_tf = camslab.pose_tf:main",
             "estimator = camslab.estimator_node:main",
             "car_node = camslab.car_node:main",
+            "car_drive = camslab.car_drive:main",
             "observation_markers = camslab.observation_markers:main",
             "calibrate = camslab.calibration:main",
             "car = camslab.car:main",

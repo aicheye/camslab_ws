@@ -52,6 +52,29 @@ ambiguity_ratio: 2.0
 marker_height: [0.10, 0.09, 0.14, 0.13]
 marker_height_known: [true, true, true, false]
 
+# Driving. With drive true the path controller runs on this computer, disabled until
+# Start is pressed in the web UI, where the path and the safe area are set too. Its
+# commands go to /<name>/cmd_vel; the command relay that survey.launch.py starts on the
+# car (camslab/car_drive.py) passes them to driver_cmd_vel, the topic of the car's own
+# driver, and sends zero once no command arrived for command_timeout. The driver itself
+# is not started from here. With drive false the car is driven by its own teleop.
+drive: true
+driver_cmd_vel: /cmd_vel         # the Twist topic the car's driver listens on (`ros2 topic list` on the car)
+command_timeout: 0.5             # the relay stops the car when the newest command is older [s]
+
+# Controller parameters for the survey, on top of params.yaml. A path needs straight
+# stretches and turns (gerono or bowtie, docs/fiducial-hints.md); this gerono peaks at
+# 0.30 m/s, 0.33 rad/s (under max_yaw_rate for the whole lap) and a curvature of
+# 2.4 1/m, under kappa_max. With a below 1.66 m the car cannot steer through its loops.
+# v_max and w_max are also the relay's limits on the car.
+controller:
+  kappa_max: 2.9                 # the R2's steering limit [1/m]
+  shape: gerono
+  a: 2.0                         # half the long axis [m]; the lap is 4.0 m by 2.0 m around (x0, y0)
+  period: 60.0                   # [s]
+  v_max: 0.4                     # [m/s]
+  w_max: 2.0                     # [rad/s]
+
 rviz: true
 webui: true                      # web UI on `port`
 port: 8000

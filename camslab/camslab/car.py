@@ -11,6 +11,7 @@ client, the estimator, RViz and the web UI run here (docs/hardware-survey.md).
     ros2 run camslab car install ros-humble-aruco-msgs   a ROS package onto the car through this computer
     ros2 run camslab car install --fetch-only ...     download it to ~/.cache/camslab/debs while online
     ros2 run camslab car camera                       the camera node on the car, rates here
+    ros2 run camslab car drive                        the command relay on the car, for the timeout test
     ros2 run camslab car calibrate --name <model>_<w>x<h>
     ros2 run camslab car status [--show]              topic rates; --show: the preview
 
@@ -47,6 +48,8 @@ SSH = ["ssh", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=5"]
 REMOTE_ENV = "source /opt/ros/{distro}/setup.bash && export ROS_DOMAIN_ID={domain}"
 NODE_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "car_node.py")
 REMOTE_NODE = "/tmp/camslab_car_node.py"        # where the car keeps its copy
+DRIVE_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "car_drive.py")
+REMOTE_DRIVE = "/tmp/camslab_car_drive.py"
 CLOCK_OFFSET = 0.02                             # tolerated car clock offset [s]
 CHRONY_MARK = "# camslab: serve time to the lab cars (ros2 run camslab car chrony)"
 ROS_APT = "http://packages.ros.org/ros2/ubuntu"     # where the cars' ROS packages come from
@@ -174,15 +177,42 @@ def camera_ssh_command(settings: dict, calibration_file: str = "", batch: bool =
             remote_shell(settings, node_command(settings, calibration_file, **options), tty=True)]
 
 
-def upload_node(settings: dict, source: str = NODE_FILE) -> None:
-    """Copies car_node.py to REMOTE_NODE on the car, into the container when one is set,
-    through ssh's stdin. A RuntimeError names the ssh error when it fails."""
+def drive_arguments(settings: dict) -> list:
+    """The command line of car_drive.py, the command relay on the car: the driver's topic,
+    the command timeout and the controller's limits, which the relay enforces again."""
+    controller = settings.get("controller") or {}
+    return ["--name", str(settings["name"]),
+            "--out", str(settings.get("driver_cmd_vel") or "/cmd_vel"),
+            "--timeout", f"{float(settings.get('command_timeout', 0.5)):g}",
+            "--v-max", f"{float(controller.get('v_max', 0.6)):g}",
+            "--w-max", f"{float(controller.get('w_max', 2.0)):g}"]
+
+
+def drive_command(settings: dict) -> str:
+    """car_drive.py on the car as a shell command; a relay left from an earlier run is
+    stopped first, as in node_command()."""
+    args = " ".join(shlex.quote(a) for a in drive_arguments(settings))
+    return (f"pkill -INT -f '^python3 {REMOTE_DRIVE}' && sleep 1; "
+            f"exec python3 {REMOTE_DRIVE} {args}")
+
+
+def drive_ssh_command(settings: dict, batch: bool = False) -> list:
+    """The ssh command that runs the command relay on the car in the foreground."""
+    ssh_options = ["-o", "BatchMode=yes"] if batch else []
+    return [*SSH, *ssh_options, "-tt", str(settings["camera_host"]),
+            remote_shell(settings, drive_command(settings), tty=True)]
+
+
+def upload_node(settings: dict, source: str = NODE_FILE, remote: str = REMOTE_NODE) -> None:
+    """Copies car_node.py to REMOTE_NODE on the car (or `source` to `remote`), into the
+    container when one is set, through ssh's stdin. A RuntimeError names the ssh error
+    when it fails."""
     host = str(settings.get("camera_host") or "")
     if not host:
         return
     with open(source, "rb") as f:
         script = f.read()
-    command = remote_shell(settings, f"cat > {REMOTE_NODE}", stdin=True)
+    command = remote_shell(settings, f"cat > {remote}", stdin=True)
     try:
         result = subprocess.run([*SSH, "-o", "BatchMode=yes", host, command], input=script,
                                 capture_output=True, timeout=30)
@@ -360,14 +390,12 @@ def header(settings: dict) -> str:
 
 # --- commands ---------------------------------------------------------------------------------
 
-class CameraProcess:
-    """The camera node on the car over ssh as a child process: car_node.py is uploaded
-    first, then run in the foreground. Its output goes to the terminal, or to a log file
-    when `log` is given. `options` are those of node_arguments()."""
+class RemoteProcess:
+    """A node on the car over ssh as a child process, run in the foreground. Its output
+    goes to the terminal, or to a log file when `log` is given."""
 
-    def __init__(self, settings: dict, calibration_file: str = "", log: str = "", **options):
-        upload_node(settings)
-        self.command = camera_ssh_command(settings, calibration_file, **options)
+    def __init__(self, command: list, log: str = ""):
+        self.command = command
         self.log = open(log, "wb") if log else None
         self.process = subprocess.Popen(self.command, stdout=self.log, stderr=self.log,
                                         stdin=subprocess.PIPE)
@@ -394,6 +422,15 @@ class CameraProcess:
                     self.process.kill()
         if self.log:
             self.log.close()
+
+
+class CameraProcess(RemoteProcess):
+    """The camera node on the car: car_node.py is uploaded first, then run. `options`
+    are those of node_arguments()."""
+
+    def __init__(self, settings: dict, calibration_file: str = "", log: str = "", **options):
+        upload_node(settings)
+        super().__init__(camera_ssh_command(settings, calibration_file, **options), log)
 
 
 def check(label: str, ok: bool, detail: str = "", hint: str = "") -> bool:
@@ -997,6 +1034,31 @@ def cmd_camera(settings: dict, args) -> int:
     return camera.process.returncode or 0
 
 
+def cmd_drive(settings: dict, args) -> int:
+    """The command relay on the car in the foreground, for the timeout test of
+    docs/hardware-survey.md before the first drive. Ctrl-C stops it there too."""
+    if not settings.get("camera_host"):
+        print("camera_host is empty: there is no car to run the relay on")
+        return 1
+    if not check_ssh(settings):
+        return 1
+    print(f"{header(settings)}\n$ {' '.join(drive_ssh_command(settings))}\n", flush=True)
+    try:
+        upload_node(settings, DRIVE_FILE, REMOTE_DRIVE)
+    except RuntimeError as e:
+        print(e)
+        return 1
+    relay = RemoteProcess(drive_ssh_command(settings))
+    try:
+        while relay.alive():
+            time.sleep(0.2)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        relay.stop()
+    return relay.process.returncode or 0
+
+
 def wait_for_images(watch: Watch, camera, screen: Screen, settings: dict, timeout: float):
     """Spins until an image arrives; returns False when the camera died or `timeout`
     passed."""
@@ -1167,6 +1229,7 @@ def main(argv=None) -> int:
     chrony.add_argument("--timesyncd", action="store_true",
                         help="use systemd-timesyncd on the car even if chrony could be installed")
     sub.add_parser("camera", help="run the camera node on the car and show the rates here")
+    sub.add_parser("drive", help="run the command relay on the car")
     cal = sub.add_parser("calibrate", help="calibrate the camera from its image topic")
     cal.add_argument("--name", required=True,
                      help="calibration name, <camera model>_<width>x<height>")
@@ -1200,7 +1263,7 @@ def main(argv=None) -> int:
         args.packages = [p for p in args.packages if "=" not in p]
     settings = load_settings(args.config, args.overrides)
     return {"find": cmd_find, "setup": cmd_setup, "clock": cmd_clock, "chrony": cmd_chrony,
-            "install": cmd_install, "camera": cmd_camera,
+            "install": cmd_install, "camera": cmd_camera, "drive": cmd_drive,
             "calibrate": cmd_calibrate, "status": cmd_status}[args.command](settings, args)
 
 

@@ -7,7 +7,7 @@ Use this page for package layout, simulation internals, and ROS interfaces. Star
 
 | Package or directory | Purpose |
 |---|---|
-| `camslab/` | Python ROS 2 package: the shared library (`types`, `trajectory`, `controller`, `safety`, `adaptive`, `fiducial`, `aruco`), the nodes `controller`, `pose_tf`, `estimator`, `car_node` and `observation_markers`, the `car` and `calibrate` tools, launch files, Gazebo model, RViz config and the camera calibrations in `config/cameras/` |
+| `camslab/` | Python ROS 2 package: the shared library (`types`, `trajectory`, `controller`, `safety`, `adaptive`, `fiducial`, `aruco`), the nodes `controller`, `pose_tf`, `estimator`, `car_node`, `car_drive` and `observation_markers`, the `car` and `calibrate` tools, launch files, Gazebo model, RViz config and the camera calibrations in `config/cameras/` |
 | `camslab_webui/` | shared web UI backend, frontend, and safety-polytope logic |
 | `camslab_standalone/` | standalone Python experiments, no ROS, one subpackage each, with shared code in `common/` |
 | `hardware/` | printable parts for the lab: `marker_mounts/` has the fiducial stands (STL, `mounts.py`) and the markers to glue on them (`markers.pdf`, `markers.py`) |

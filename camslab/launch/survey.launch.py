@@ -1,8 +1,12 @@
 """Fiducial surveying on a real car: the camera node (camera and ArUco detection), the
-motion capture pose, the estimator, RViz and the web UI. Drive the car by any means
-(teleop, or live.launch.py's controller); settings in config/survey.yaml. With
-`camera_host` set, the camera node is uploaded to the car and run there over ssh
-(camslab.car) and everything else runs here."""
+motion capture pose, the estimator, RViz and the web UI; settings in config/survey.yaml.
+With `camera_host` set, the camera node is uploaded to the car and run there over ssh
+(camslab.car) and everything else runs here.
+
+With `drive` set, the path controller runs here too, disabled until Start is pressed in
+the web UI, with the safe area of the `polytope` file, and its commands reach the car's
+driver through the command relay on the car (camslab.car_drive), which stops the car
+when the commands stop arriving. Without `drive` the car is driven by its own teleop."""
 
 import os
 import re
@@ -13,7 +17,8 @@ import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import ExecuteProcess, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 from camslab import car
@@ -22,8 +27,9 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import camslab_settings
 
 
-def rviz_config(share, name):
-    """rviz/fleet.rviz plus the mocap pose, the fiducial markers and the TF tree."""
+def rviz_config(share, name, drive=False):
+    """rviz/fleet.rviz plus the mocap pose, the fiducial markers and the TF tree, and
+    with `drive` the controller's safe area, path and reference."""
     with open(os.path.join(share, "rviz", "fleet.rviz")) as f:
         config = yaml.safe_load(f)
     volatile = {"Depth": 5, "Durability Policy": "Volatile", "History Policy": "Keep Last"}
@@ -47,6 +53,21 @@ def rviz_config(share, name):
          "Topic": {"Value": f"/{name}/preview/compressed", **volatile,
                    "Reliability Policy": "Best Effort"}},
     ]
+    if drive:
+        latched = {"Depth": 1, "Durability Policy": "Transient Local",
+                   "History Policy": "Keep Last", "Reliability Policy": "Reliable"}
+        config["Visualization Manager"]["Displays"] += [
+            {"Class": "rviz_default_plugins/Polygon", "Name": "safety_polytope",
+             "Enabled": True, "Topic": {"Value": f"/{name}/safety_polytope", **latched},
+             "Color": "220; 40; 40", "Alpha": 1, "Value": True},
+            {"Class": "rviz_default_plugins/Path", "Name": f"{name} ref_path", "Enabled": True,
+             "Topic": {"Value": f"/{name}/ref_path", **latched},
+             "Color": "235; 104; 52", "Line Style": "Lines", "Value": True},
+            {"Class": "rviz_default_plugins/Pose", "Name": f"{name} ref_pose", "Enabled": True,
+             "Topic": {"Value": f"/{name}/ref_pose", **volatile, "Reliability Policy": "Reliable"},
+             "Color": "235; 104; 52", "Shape": "Arrow", "Shaft Length": 0.25,
+             "Shaft Radius": 0.02, "Head Length": 0.08, "Head Radius": 0.05, "Value": True},
+        ]
     out = tempfile.NamedTemporaryFile("w", prefix="camslab_survey_", suffix=".rviz",
                                       delete=False)
     with out:
@@ -95,15 +116,32 @@ def survey(context):
                           "camera_delay": float(settings["camera_delay"]),
                           "max_yaw_rate": float(settings.get("max_yaw_rate", 0.0))}]),
     ]
+    drive = bool(settings.get("drive"))
+    bridge = {"backend_label": f"Fiducial survey, {name}", "port": int(settings["port"]),
+              "robot_name": name, "adaptive": "fiducial"}
+    if drive:
+        # The controller never starts by itself on the car: Start in the web UI enables it.
+        polytope = LaunchConfiguration("polytope").perform(context)
+        files = [LaunchConfiguration("params").perform(context),
+                 camslab_settings.controller_file(settings)]
+        if polytope and os.path.isfile(polytope):
+            files.append(polytope)
+        actions.append(Node(package="camslab", executable="controller", namespace=name,
+                            output="screen", parameters=files + [{"start_enabled": False}]))
+        if settings.get("camera_host"):
+            car.upload_node(settings, car.DRIVE_FILE, car.REMOTE_DRIVE)
+            actions.append(ExecuteProcess(cmd=car.drive_ssh_command(settings, batch=True),
+                                          name="drive", output="screen"))
+        else:
+            actions.append(Node(package="camslab", executable="car_drive", name="drive",
+                                output="screen", arguments=car.drive_arguments(settings)))
+        bridge.update({"start_enabled": False, "polytope_file": polytope})
     if settings["rviz"]:
         actions.append(Node(package="rviz2", executable="rviz2", output="log",
-                            arguments=["-d", rviz_config(share, name)]))
+                            arguments=["-d", rviz_config(share, name, drive)]))
     if settings["webui"]:
-        actions.append(Node(
-            package="camslab_webui", executable="webui_bridge", output="screen",
-            parameters=[{"backend_label": f"Fiducial survey, {name}",
-                         "port": int(settings["port"]), "robot_name": name,
-                         "adaptive": "fiducial"}]))
+        actions.append(Node(package="camslab_webui", executable="webui_bridge",
+                            output="screen", parameters=[bridge]))
     return actions
 
 
@@ -111,5 +149,11 @@ def generate_launch_description():
     share = get_package_share_directory("camslab")
     return LaunchDescription([
         *camslab_settings.arguments(os.path.join(share, "config", "survey.yaml")),
+        DeclareLaunchArgument("params", default_value=os.path.join(share, "config", "params.yaml"),
+                              description="controller parameter file"),
+        DeclareLaunchArgument("polytope",
+                              default_value=camslab_settings.default_polytope_file(__file__),
+                              description="safety polytope file: loaded when it exists, and "
+                              "where the web UI saves it; empty for none"),
         OpaqueFunction(function=survey),
     ])

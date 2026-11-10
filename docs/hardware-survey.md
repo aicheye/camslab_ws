@@ -265,6 +265,8 @@ calibration is reported instead of guessed.
 | `camera_delay` | image latency [s]; the robot pose is taken this long before the image stamp |
 | `max_yaw_rate` | the estimator skips an image taken while the car turned faster [rad/s]; 0 for no limit |
 | `preview_rate` | JPEG frames per second streamed from the car for RViz and `car status --show`; 0 for none |
+| `drive`, `driver_cmd_vel`, `command_timeout` | whether the path controller and the command relay run, the Twist topic of the car's driver, and the age at which the relay replaces a command by zero [s] |
+| `controller` | controller parameters on top of `params.yaml`, as in {doc}`configuration`: the path, `kappa_max`, `v_max`, `w_max` |
 | `dictionary`, `marker_size`, `marker_ids` | the printed markers; the camera node publishes only these ids, because floor and shelf texture decodes as a random id of a 4x4 dictionary now and then |
 | `min_marker_pixels`, `ambiguity_ratio` | which detections become observations: the shortest side in the image [px] and the ratio of the two pose solutions' reprojection errors; 0 switches a check off |
 | `marker_height`, `marker_height_known` | the centre heights above the floor and which of them the estimator may use |
@@ -277,10 +279,11 @@ The estimator gains and pair-selection thresholds stay in `config/fiducial.yaml`
 
 This uploads and starts the camera node on the car over ssh (with the intrinsics of
 `camera` on its command line) and, here, `vrpn_mocap`, `pose_tf`, the estimator with
-`sensor: aruco`, RViz with the preview image and the web UI on <http://127.0.0.1:8000>. Drive the car with the teleop of its driver or with
-{doc}`running`'s controller on a path with straight stretches (gerono, or a bowtie at
-least 2 m wide): the camera orientation needs both pure translations and turns, see
-`docs/fiducial-hints.md`.
+`sensor: aruco`, RViz with the preview image and the web UI on <http://127.0.0.1:8000>.
+With `drive: true` it also starts the path controller and the command relay on the car,
+see [Driving and safety](#driving-and-safety). The path needs straight stretches and
+turns (gerono, or a bowtie at least 2 m wide): the camera orientation needs both pure
+translations and turns, see `docs/fiducial-hints.md`.
 
 Watch the chain in a second terminal:
 
@@ -303,6 +306,67 @@ markers it found and their distances. Check, from the top line down:
 The estimate is the first six values of `/<name>/estimate`: the Cayley vector `x` of the
 camera orientation and `t_X`, the camera position in the robot frame. The marker poses
 follow, three Cayley components and three positions per marker, in `marker_ids` order.
+
+## Driving and safety
+
+With `drive: true` in `survey.yaml`, `survey.launch.py` runs the path controller of
+{doc}`running` on this computer and the web UI controls it: **Start** and **Stop**, the
+path ({doc}`paths`) and the safe area ({doc}`safety-area`). The controller starts
+disabled and drives only after **Start**. With `drive: false` nothing here commands the
+car and it is driven with its own teleop.
+
+The car's own driver must be running on the car; it is not started from here. The
+controller publishes `/<name>/cmd_vel`. On the car, the command relay
+(`camslab/camslab/car_drive.py`, uploaded and started over ssh like the camera node)
+passes the newest command to `driver_cmd_vel`, the topic the driver listens on, 20 times
+a second. Find that topic with `ros2 topic list` in the car's container while the driver
+runs. The relay logs a warning every 5 s while nothing listens on it.
+
+What stops the car:
+
+| Event | What happens |
+|---|---|
+| **Stop** in the web UI | the controller sends zero |
+| The path comes within `polytope_margin` (0.2 m) of the safe area's edge | the controller refuses **Start** |
+| The car is outside the safe area | the controller refuses **Start** |
+| The car leaves the safe area | the controller disables itself and sends zero |
+| No motion capture pose for `pose_timeout` (0.5 s) | the controller sends zero |
+| The WiFi, this computer or the controller fails | no command reaches the car, and the relay sends zero after `command_timeout` (0.5 s) |
+
+The controller limits a command to `v_max` and to a turning rate of
+`min(w_max, kappa_max |v|)`, and the relay applies `v_max` and `w_max` of the
+`controller` block again on the car. The relay measures the age of a command on the
+car's own clock, so it does not depend on the clock synchronization.
+
+Nothing here sees obstacles or people. The safe area is a convex polygon for the
+rear-axle centre: the front of the car reaches 0.2 m beyond it, and leaving it is
+detected after the car crossed the edge, so keep the edge at least 0.5 m from walls and
+keep every marker stand outside it. A marker is used up to about 2 m away
+([Which images are used](#which-images-are-used)), so stands 0.5 m outside the edge are
+in range of a path near the edge. The relay cannot stop the car if the relay itself or
+the car's driver hangs; keep the car within reach.
+
+Before the first drive of a car, and after a change of its driver:
+
+1. Put the car on a box with the wheels off the floor and start its driver.
+2. Run `ros2 run camslab car drive`. It starts the relay on the car and prints its log.
+3. In a second terminal send a slow command:
+
+       ros2 topic pub -r 20 /<name>/cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.1}}"
+
+   The wheels turn forward. With `angular: {z: 0.3}` added, the front wheels steer left,
+   because a positive `angular.z` is a left turn. If they steer right or stay straight,
+   the driver reads `angular.z` differently from the controller, and the controller must
+   not drive this car until that is resolved. If nothing moves and the relay warns that
+   nothing listens, `driver_cmd_vel` is not the driver's topic.
+4. Stop the command with Ctrl-C. The wheels stop within about half a second and the relay
+   logs `no command for 0.5 s`.
+5. Set the safe area in the web UI after every motion capture calibration, then drive the
+   first lap with a hand near the car.
+
+The default path of `survey.yaml` is a gerono of 4.0 m by 2.0 m with a lap of 60 s: it
+peaks at 0.30 m/s, 0.33 rad/s and a curvature of 2.4 1/m. A gerono with `a` below 1.66 m
+is tighter than the R2's steering limit of 2.9 1/m.
 
 ## Ground truth
 
