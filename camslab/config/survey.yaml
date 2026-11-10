@@ -32,6 +32,7 @@ pixel_format: yuyv
 camera: angostura_640x480        # e.g. yahboom_r2_640x480; empty: no calibration, see nominal_fov
 nominal_fov: 60.0                # without a calibration: horizontal field of view [deg]; 0 requires one
 camera_delay: 0.05               # image latency: the pose is taken this long before the stamp [s]
+max_yaw_rate: 0.5                # the estimator skips an image taken while the car turned faster [rad/s]; 0: none
 preview_rate: 2.0                # JPEG frames per second streamed from the car on preview/compressed
 
 # Markers: cv2.aruco dictionary, printed side [m], the ids in the lab (the camera node
@@ -42,6 +43,12 @@ preview_rate: 2.0                # JPEG frames per second streamed from the car 
 dictionary: DICT_4X4_50
 marker_size: 0.14
 marker_ids: [0, 1, 2, 3]
+# Which detections become observations (docs/hardware-survey.md, "Which images are used").
+# The camera node drops a marker whose shortest side in the image is under
+# min_marker_pixels, and one whose second planar pose solution has a reprojection error
+# under ambiguity_ratio times that of the first. 0 switches a check off.
+min_marker_pixels: 30.0
+ambiguity_ratio: 2.0
 marker_height: [0.10, 0.09, 0.14, 0.13]
 marker_height_known: [true, true, true, false]
 

@@ -41,8 +41,8 @@ with no dependency on this workspace: `ros2 run camslab car` and the launch file
 to `/tmp/camslab_car_node.py` on the car over ssh before every start, so a change here
 reaches the car without a build there. It opens the camera with OpenCV, detects the
 markers in every frame and publishes `observations` (an `aruco_msgs/MarkerArray`: one
-marker per visible fiducial with its id and pose in the estimator's camera frame, stamped
-at capture, empty when nothing is seen),
+marker per accepted fiducial with its id and pose in the estimator's camera frame, stamped
+at capture, empty when nothing is accepted, see [Which images are used](#which-images-are-used)),
 `camera_info` and `preview/compressed`, a JPEG of the frame at `preview_rate` Hz with the
 detections drawn. The motion capture client, the estimator, RViz and the web UI run on
 your computer, which must be on the car's network and in the same `ROS_DOMAIN_ID` as the
@@ -126,14 +126,59 @@ second. Hold a marker in front of the camera and check:
 
 1. The square appears where the marker is relative to the camera: ahead is +x, left is
    +y, up is +z, and the label's distance is the tape-measure distance from the lens to
-   the marker centre to within a few centimetres. A distance off by a constant factor
-   means a wrong `marker_size` or `camera` calibration.
+   the marker centre to within a few centimetres. Measure at 1 m and at 2 m. A distance
+   off by a constant factor means a wrong `marker_size` or `camera` calibration. A
+   distance that reads long by an amount that grows with the square of the distance is
+   image blur, which rounds the corners inward: on rendered images with a blur of 0.8 px
+   it is 4 mm at 1 m and 20 mm at 2 m.
 2. The square tilts with the marker.
 3. The preview runs at `preview_rate` and the observation rate in the terminal is the
    camera's frame rate. The car node logs its detection time per frame; it must stay
    below the frame period.
 
+A marker that the preview outlines but that has no square was detected and dropped: the
+preview labels it `small` or `ambiguous` in red instead of with its distance, see
+[Which images are used](#which-images-are-used).
+
 No motion capture is needed for this check.
+
+## Which images are used
+
+A survey estimates constants: the camera mount and the marker poses. An image without a
+marker costs driving time, and an image with a wrong marker pose moves the estimate, so
+the survey uses fewer images and only the ones whose pose is well determined. Nothing
+fills a gap: the estimator leaves a marker alone in the images without it, and pairs an
+observation with the earlier ones of the last `l_buffer` of travel, so a marker may come
+and go. In RViz a square stays for 0.5 s after its last observation and the TF frame
+`marker_<id>` stays where it was last seen; neither reaches the estimator.
+
+The camera node refines the detected corners to subpixel accuracy (about 0.3 px instead
+of 0.8 px on rendered images) and drops a detected marker in two cases:
+
+- `small`: its shortest side in the image is under `min_marker_pixels`. The depth error
+  is `distance * corner error / side`, and a marker of side `s` at distance `z` seen at
+  the angle `a` from head-on has a shortest side of `f s cos(a) / z` pixels. With
+  `f` = 523 px, `s` = 0.14 m and 30 px, a marker is used up to 2.4 m head-on and 2.1 m
+  at 30 degrees, so the path has to pass every marker within about 2 m.
+- `ambiguous`: a flat square has two poses that project onto almost the same corners
+  when it is seen head-on or from far away, and the wrong one is tens of degrees off.
+  The marker is dropped when the two poses differ by more than 5 degrees and the
+  reprojection error of the second is under `ambiguity_ratio` times that of the first.
+
+The estimator skips an image taken while the car turned faster than `max_yaw_rate`. An
+error `dt` between the image time and the pose time moves a marker at distance `z` by
+`z * yaw rate * dt`: 10 mm at 2 m, 0.5 rad/s and 10 ms, and a turn blurs the image.
+Rotation pairs need two images at different headings, and neither has to be taken in
+the turn. Every 5 s the estimator logs how many images it used and skipped, and the
+camera node logs the markers per second it published and dropped for each reason.
+
+On 1500 rendered views between 0.6 m and 3.5 m, up to 65 degrees from head-on, with a
+blur of 0.8 px and pixel noise, the camera node without these checks published 96 % of
+the markers with an orientation error of 17 degrees rms (152 over 15 degrees) and a
+position error of 71 mm rms. With them it publishes 45 %, all within 2.4 m, with 0.7
+degrees rms (3.4 at most) and 13 mm rms. These numbers are from rendered images; the
+real camera's blur and noise were not measured. To measure them, park the car 1 m and
+2 m from a marker and take the spread of the logged positions.
 
 ## Camera calibration
 
@@ -218,8 +263,10 @@ calibration is reported instead of guessed.
 | `camera` | the calibration: a name in `config/cameras/` or a path to a file |
 | `nominal_fov` | horizontal field of view [deg] used while `camera` is empty; 0 requires a calibration |
 | `camera_delay` | image latency [s]; the robot pose is taken this long before the image stamp |
+| `max_yaw_rate` | the estimator skips an image taken while the car turned faster [rad/s]; 0 for no limit |
 | `preview_rate` | JPEG frames per second streamed from the car for RViz and `car status --show`; 0 for none |
 | `dictionary`, `marker_size`, `marker_ids` | the printed markers; the camera node publishes only these ids, because floor and shelf texture decodes as a random id of a 4x4 dictionary now and then |
+| `min_marker_pixels`, `ambiguity_ratio` | which detections become observations: the shortest side in the image [px] and the ratio of the two pose solutions' reprojection errors; 0 switches a check off |
 | `marker_height`, `marker_height_known` | the centre heights above the floor and which of them the estimator may use |
 
 The estimator gains and pair-selection thresholds stay in `config/fiducial.yaml`.
@@ -244,7 +291,7 @@ markers it found and their distances. Check, from the top line down:
 
 1. `preview` runs at `preview_rate`, `observations` at the camera rate, and
    `camera_info` says `fx ...`, not `uncalibrated`.
-2. `seen` lists one marker per visible fiducial with its distance; in RViz they are
+2. `seen` lists one marker per accepted fiducial with its distance; in RViz they are
    squares and TF frames `marker_<id>` hanging off `<name>/camera` (from the
    `observation_markers` node), and a marker straight ahead of the camera has a positive x.
 3. `pose` arrives at 100 Hz with the mocap position and yaw, and the TF frame

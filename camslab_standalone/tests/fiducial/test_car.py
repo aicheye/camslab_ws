@@ -42,7 +42,9 @@ def test_camera_node_command_carries_the_settings_and_the_calibration(monkeypatc
     settings = {**SETTINGS, "dictionary": "DICT_4X4_50", "marker_size": 0.14, "preview_rate": 2.0,
                 "marker_ids": [0, 1, 2, 3]}
     command = car.node_command(settings)
-    assert "--ids 0 1 2 3 " in command
+    assert "--ids 0 1 2 3 --min-side 30 --ambiguity-ratio 2 " in command
+    args = car.node_arguments({**settings, "min_marker_pixels": 24, "ambiguity_ratio": 0})
+    assert args[args.index("--min-side") + 1] == "24" and args[args.index("--ambiguity-ratio") + 1] == "0"
     assert command.startswith("pkill -INT -f '^python3 /tmp/camslab_car_node.py' && sleep 1; exec "
                               "python3 /tmp/camslab_car_node.py --name angostura --device /dev/video0 ")
     assert "--pixel-format yuyv" in command and "--fx" not in command and "--draw" in command

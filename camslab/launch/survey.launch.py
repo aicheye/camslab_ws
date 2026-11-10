@@ -92,7 +92,8 @@ def survey(context):
                           "marker_ids": [int(i) for i in settings["marker_ids"]],
                           "marker_height": [float(h) for h in settings["marker_height"]],
                           "marker_height_known": [bool(k) for k in settings["marker_height_known"]],
-                          "camera_delay": float(settings["camera_delay"])}]),
+                          "camera_delay": float(settings["camera_delay"]),
+                          "max_yaw_rate": float(settings.get("max_yaw_rate", 0.0))}]),
     ]
     if settings["rviz"]:
         actions.append(Node(package="rviz2", executable="rviz2", output="log",

@@ -3,13 +3,22 @@ car, where `ros2 run camslab car` and survey.launch.py upload this file and star
 ssh, or on this computer. It opens the camera with OpenCV, detects the ArUco markers in
 every frame and publishes, in the namespace /<name>:
 
-- `observations` (aruco_msgs/MarkerArray): one Marker per visible fiducial with its id
+- `observations` (aruco_msgs/MarkerArray): one Marker per accepted fiducial with its id
   and pose in the estimator's camera frame (x forward, z up), stamped when the frame was
   grabbed, frame_id <name>/camera. Published for every frame, empty when no marker is
-  seen, so its rate is the image rate.
+  accepted, so its rate is the image rate.
 - `camera_info` (sensor_msgs/CameraInfo): the intrinsics in use, once a second.
 - `preview/compressed` (sensor_msgs/CompressedImage): the frame as JPEG at --preview-rate
   Hz, with the detections drawn when --draw is set. The only image that leaves the car.
+
+A survey estimates constants, so a frame without a marker costs driving time and a
+frame with a wrong pose moves the estimate. The node therefore publishes a marker only
+when its pose is well determined and never repeats an old pose: the corners are refined
+to subpixel accuracy, a marker whose shortest side is under --min-side pixels is
+dropped (the depth error is distance * corner error / side), and so is one whose two
+planar pose solutions differ and fit the corners about equally well
+(--ambiguity-ratio), because the wrong one is tens of degrees off. The preview labels a dropped marker with the
+reason.
 
 Self-contained on purpose: it needs rclpy, numpy, OpenCV with the aruco module and the
 aruco_msgs package (ros-<distro>-aruco-msgs), and nothing of camslab, because the car
@@ -19,7 +28,8 @@ equal. Settings come as command line arguments (camslab.car.node_arguments build
 
     python3 car_node.py --name cologne --device /dev/video0 --width 640 --height 480 \\
         --fps 30 --pixel-format yuyv --dictionary DICT_4X4_50 --marker-size 0.14 \\
-        --fx 528 --fy 528 --cx 325 --cy 239 --dist -0.4 0.2 0 0 0 --preview-rate 2 --draw
+        --fx 528 --fy 528 --cx 325 --cy 239 --dist -0.4 0.2 0 0 0 --min-side 30 \\
+        --ambiguity-ratio 2 --preview-rate 2 --draw
 """
 
 import argparse
@@ -38,6 +48,9 @@ INFO_PERIOD = 1.0
 GRAB_FAILURES = 30          # consecutive failed grabs before the camera is reopened
 REOPEN_PERIOD = 2.0         # seconds between attempts to reopen a lost camera
 REOPEN_TIMEOUT = 30.0       # seconds of attempts before the node gives up
+REFINE_WINDOW = 3           # half side of the subpixel corner search window [px]
+SAME_POSE = math.radians(5.0)   # two pose solutions closer than this count as one
+SMALL, AMBIGUOUS = "small", "ambiguous"     # why a detected marker is not published
 
 
 def parse_args(argv=None):
@@ -57,6 +70,13 @@ def parse_args(argv=None):
     p.add_argument("--ids", type=int, nargs="*", default=[],
                    help="publish only these marker ids; empty: all. Texture decodes as a "
                         "random id of a 4x4 dictionary now and then, so the lab's ids only")
+    p.add_argument("--min-side", type=float, default=30.0,
+                   help="drop a marker whose shortest side in the image is shorter [px]; "
+                        "0: no limit")
+    p.add_argument("--ambiguity-ratio", type=float, default=2.0,
+                   help="drop a marker unless the reprojection error of its second planar "
+                        "pose solution is at least this many times that of the first; "
+                        "0: no check")
     p.add_argument("--fx", type=float, default=0.0)
     p.add_argument("--fy", type=float, default=0.0)
     p.add_argument("--cx", type=float, default=0.0)
@@ -122,25 +142,61 @@ def quaternion_of(R):
     return tuple(q)
 
 
+def shortest_side(quad):
+    """The shortest side of a detected marker in the image [px]."""
+    quad = np.asarray(quad, float).reshape(4, 2)
+    return float(np.linalg.norm(quad - np.roll(quad, 1, axis=0), axis=1).min())
+
+
 class Detector:
     """ArUco detection and pose estimation with either OpenCV API. detect() returns
-    {id: (R, t)} in the estimator's camera frame; corners and ids of the last frame stay
-    on the object for draw()."""
+    {id: (R, t)} in the estimator's camera frame for the markers whose pose is well
+    determined; `rejected` holds {id: SMALL or AMBIGUOUS} for the others, and the corners
+    and ids of the last frame stay on the object for draw()."""
 
-    def __init__(self, dictionary, marker_size, K=None, dist=None, ids=()):
+    def __init__(self, dictionary, marker_size, K=None, dist=None, ids=(), min_side=30.0,
+                 ambiguity_ratio=2.0):
         import cv2
 
         self.cv2 = cv2
         self.corners = marker_corners(marker_size)
         self.K, self.dist = K, dist
         self.ids = set(int(i) for i in ids)         # empty: every id
-        self.found_corners, self.found_ids = [], None
+        self.min_side, self.ambiguity_ratio = float(min_side), float(ambiguity_ratio)
+        self.found_corners, self.found_ids, self.rejected = [], None, {}
         aruco_dict = cv2.aruco.getPredefinedDictionary(getattr(cv2.aruco, dictionary))
-        if hasattr(cv2.aruco, "ArucoDetector"):
-            self._detect = cv2.aruco.ArucoDetector(aruco_dict, cv2.aruco.DetectorParameters()).detectMarkers
+        new_api = hasattr(cv2.aruco, "ArucoDetector")
+        params = cv2.aruco.DetectorParameters() if new_api else cv2.aruco.DetectorParameters_create()
+        # The corners of the contour are whole pixels, about 0.8 px off; the refinement
+        # brings them to about 0.3 px. A fixed window of REFINE_WINDOW keeps that down to
+        # markers of 20 px: OpenCV's default shrinks the window with the marker and stops
+        # refining under about 30 px.
+        params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        params.cornerRefinementWinSize = REFINE_WINDOW
+        if hasattr(params, "relativeCornerRefinmentWinSize"):
+            params.relativeCornerRefinmentWinSize = 1.0
+        if new_api:
+            self._detect = cv2.aruco.ArucoDetector(aruco_dict, params).detectMarkers
         else:
-            params = cv2.aruco.DetectorParameters_create()
             self._detect = lambda image: cv2.aruco.detectMarkers(image, aruco_dict, parameters=params)
+
+    def pose(self, quad):
+        """(rvec, tvec) of a marker from its corners, or AMBIGUOUS. A planar square has
+        two poses that project onto almost the same corners when it is seen head-on or
+        from far away; IPPE returns both, sorted by reprojection error. Exactly head-on
+        the two coincide, and a pair closer than SAME_POSE is not an ambiguity."""
+        n, rvecs, tvecs, errors = self.cv2.solvePnPGeneric(
+            self.corners, quad.reshape(4, 2), self.K, self.dist,
+            flags=self.cv2.SOLVEPNP_IPPE_SQUARE)
+        if not n:
+            return None
+        errors = np.asarray(errors, float).reshape(-1)
+        if n > 1 and errors[1] < self.ambiguity_ratio * errors[0]:
+            R0, R1 = (self.cv2.Rodrigues(rvec)[0] for rvec in rvecs[:2])
+            between, _ = self.cv2.Rodrigues(R0.T @ R1)
+            if float(np.linalg.norm(between)) > SAME_POSE:
+                return AMBIGUOUS
+        return rvecs[0], tvecs[0]
 
     def detect(self, image):
         corners, ids, _ = self._detect(image)
@@ -148,28 +204,38 @@ class Detector:
             keep = [i for i, marker_id in enumerate(ids.reshape(-1)) if int(marker_id) in self.ids]
             corners = tuple(corners[i] for i in keep)
             ids = ids[keep] if keep else None
-        self.found_corners, self.found_ids = corners, ids
+        self.found_corners, self.found_ids, self.rejected = corners, ids, {}
         found = {}
         if ids is None or self.K is None:
             return found
         for quad, marker_id in zip(corners, ids.reshape(-1)):
-            ok, rvec, tvec = self.cv2.solvePnP(self.corners, quad.reshape(4, 2), self.K, self.dist,
-                                               flags=self.cv2.SOLVEPNP_IPPE_SQUARE)
-            if ok:
-                found[int(marker_id)] = observation(rvec, tvec)
+            if shortest_side(quad) < self.min_side:
+                self.rejected[int(marker_id)] = SMALL
+                continue
+            pose = self.pose(quad)
+            if pose is AMBIGUOUS:
+                self.rejected[int(marker_id)] = AMBIGUOUS
+            elif pose is not None:
+                found[int(marker_id)] = observation(*pose)
         return found
 
     def draw(self, image, found):
-        """The detected markers and their distances on `image`, in place."""
+        """The detected markers on `image`, in place: the distance of a published marker
+        and the reason of a dropped one."""
         if self.found_ids is None:
             return
         self.cv2.aruco.drawDetectedMarkers(image, self.found_corners, self.found_ids)
         for quad, marker_id in zip(self.found_corners, self.found_ids.reshape(-1)):
-            if int(marker_id) in found:
-                x, y = quad.reshape(4, 2).min(axis=0)
-                d = float(np.linalg.norm(found[int(marker_id)][1]))
-                self.cv2.putText(image, f"{d:.2f} m", (int(x), int(y) - 6),
-                                 self.cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, self.cv2.LINE_AA)
+            marker_id = int(marker_id)
+            if marker_id in found:
+                text, color = f"{float(np.linalg.norm(found[marker_id][1])):.2f} m", (0, 255, 255)
+            elif marker_id in self.rejected:
+                text, color = self.rejected[marker_id], (0, 0, 255)
+            else:
+                continue
+            x, y = quad.reshape(4, 2).min(axis=0)
+            self.cv2.putText(image, text, (int(x), int(y) - 6),
+                             self.cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, self.cv2.LINE_AA)
 
 
 def open_camera(device, width, height, fps, pixel_format):
@@ -222,7 +288,8 @@ def run(args):
         log.error(str(e))
         return 2
     K, dist = calibration if calibration is not None else (None, None)
-    detector = Detector(args.dictionary, args.marker_size, K, dist, args.ids) if args.detect else None
+    detector = (Detector(args.dictionary, args.marker_size, K, dist, args.ids, args.min_side,
+                         args.ambiguity_ratio) if args.detect else None)
     observations_pub = node.create_publisher(MarkerArray, "observations", 10)
     info_pub = node.create_publisher(CameraInfo, "camera_info", qos_profile_sensor_data)
     preview_pub = node.create_publisher(CompressedImage, "preview/compressed",
@@ -238,11 +305,14 @@ def run(args):
     log.info(f"{args.device} {args.width}x{args.height} @ {args.fps:g} fps {args.pixel_format}, "
              + (f"{args.dictionary}, markers of {args.marker_size} m, "
                 f"{'ids ' + ' '.join(map(str, args.ids)) if args.ids else 'all ids'}, "
-                f"{'calibrated' if args.fx > 0 else f'{args.fov:.0f} deg fov'}" if args.detect
+                f"{'calibrated' if args.fx > 0 else f'{args.fov:.0f} deg fov'}, "
+                f"side at least {args.min_side:g} px, ambiguity ratio {args.ambiguity_ratio:g}"
+                if args.detect
                 else "no detection")
              + f", preview {args.preview_rate:g} Hz" + (" drawn" if args.draw else ""))
 
     frames, markers, failures, detect_time, total = 0, 0, 0, 0.0, 0
+    dropped = {SMALL: 0, AMBIGUOUS: 0}
     rate_time = last_preview = last_info = time.monotonic()
     preview_period = 1.0 / args.preview_rate if args.preview_rate > 0 else None
     try:
@@ -288,6 +358,8 @@ def run(args):
                 found = detector.detect(image)
                 detect_time += time.monotonic() - t0
                 markers += len(found)
+                for reason in detector.rejected.values():
+                    dropped[reason] += 1
                 out = MarkerArray()
                 out.header.stamp = stamp
                 out.header.frame_id = frame_id
@@ -323,10 +395,13 @@ def run(args):
                 dt = now - rate_time
                 line = f"{frames / dt:.1f} frames/s"
                 if detector is not None:
-                    line += (f", {markers / dt:.1f} markers/s, detection "
+                    line += (f", {markers / dt:.1f} markers/s, dropped "
+                             f"{dropped[SMALL] / dt:.1f} small and "
+                             f"{dropped[AMBIGUOUS] / dt:.1f} ambiguous, detection "
                              f"{1e3 * detect_time / max(frames, 1):.0f} ms/frame")
                 log.info(line)
                 frames, markers, detect_time, rate_time = 0, 0, 0.0, now
+                dropped = {SMALL: 0, AMBIGUOUS: 0}
             if args.frames and total >= args.frames:
                 break
             rclpy.spin_once(node, timeout_sec=0.0)

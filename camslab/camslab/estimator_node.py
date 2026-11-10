@@ -32,6 +32,7 @@ PATH_NAMES = ("shape", "x0", "y0", "theta0", "kappa", "circle_speed", "a", "b", 
 FIDUCIAL_GAINS = ("gamma_x", "gamma_t", "gamma_m", "gamma_j", "alpha_x", "alpha_t",
                   "psi_min", "psi_max", "straight_tol", "d_min", "d_step", "l_buffer")
 MARKER_RATE = 10.0
+REPORT_PERIOD = 5.0         # seconds between the counts of images skipped in a turn
 TRUE_COLOR = ColorRGBA(r=0.6, g=0.6, b=0.6, a=0.6)
 ESTIMATE_COLOR = ColorRGBA(r=0.12, g=0.62, b=0.54, a=1.0)
 
@@ -144,6 +145,7 @@ class EstimatorNode(Node):
         self.sensor = str(self.param("sensor", "simulated"))
         self.frame = str(self.param("frame", "map"))
         self.camera_delay = float(self.param("camera_delay", 0.0))
+        self.max_yaw_rate = float(self.param("max_yaw_rate", 0.0))
         self.path = {n: self.get_parameter(n).value for n in PATH_NAMES if self.has_parameter(n)}
 
         self.estimate_pub = self.create_publisher(Float64MultiArray, "estimate", 10)
@@ -163,6 +165,8 @@ class EstimatorNode(Node):
         self.n = 0
         self.truth = None
         self.warned_delay = False
+        self.used = self.turning = 0    # images given to the estimator and skipped in a turn
+        self.last_report = None
         self.last_tick = None
         self.last_markers = -math.inf
         self.estimator = None
@@ -266,11 +270,19 @@ class EstimatorNode(Node):
     def measurement(self):
         """(W_T_R, {j: C_T_Mj}) for the next update with the ArUco sensor: the robot pose
         at the image time of the newest observations, or the latest pose and no
-        observations when none arrived since the last update."""
+        observations when none arrived since the last update. An image taken while the
+        robot turned faster than max_yaw_rate is skipped: an error dt of the image time
+        moves a marker at distance z by z * yaw rate * dt, and the image is blurred."""
         if self.pending is None:
             return self.history.latest(), {}
         stamp, found = self.pending
         self.pending = None
+        if self.max_yaw_rate > 0.0:
+            rate = self.history.angular_speed(stamp - self.camera_delay)
+            if rate is not None and rate > self.max_yaw_rate:
+                self.turning += 1
+                return self.history.latest(), {}
+        self.used += 1
         T_R = self.history.at(stamp - self.camera_delay)
         if T_R is None:
             if not self.warned_delay:
@@ -308,6 +320,15 @@ class EstimatorNode(Node):
             return
         dt = 0.0 if self.last_tick is None else now - self.last_tick
         self.last_tick = now
+        if self.last_report is None:
+            self.last_report = now
+        elif now - self.last_report >= REPORT_PERIOD:
+            if self.turning:
+                self.get_logger().info(
+                    f"{self.used} images used, {self.turning} skipped above "
+                    f"{self.max_yaw_rate:g} rad/s in the last {now - self.last_report:.0f} s")
+            self.used = self.turning = 0
+            self.last_report = now
         try:
             self.step(now, dt)
         except NotImplementedError as exc:

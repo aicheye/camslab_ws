@@ -151,3 +151,17 @@ class PoseHistory:
         R0, R1 = T0[:3, :3], T1[:3, :3]
         R = R0 @ rodrigues(s * log_rotation(R0.T @ R1))
         return pose(R, (1.0 - s) * T0[:3, 3] + s * T1[:3, 3])
+
+    def angular_speed(self, t: float, span: float = 0.1):
+        """The robot's turning rate [rad/s] around time t: the rotation between the poses
+        at t - span / 2 and t + span / 2, both moved into the stored interval, over the
+        time between them. None when the history is empty or holds one instant."""
+        if not self.entries:
+            return None
+        first, last = self.entries[0][0], self.entries[-1][0]
+        t0 = min(max(t - span / 2.0, first), last)
+        t1 = min(max(t + span / 2.0, first), last)
+        if t1 <= t0:
+            return None
+        R0, R1 = self.at(t0)[:3, :3], self.at(t1)[:3, :3]
+        return float(np.linalg.norm(log_rotation(R0.T @ R1))) / (t1 - t0)

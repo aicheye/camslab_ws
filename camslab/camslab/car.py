@@ -135,6 +135,8 @@ def node_arguments(settings: dict, calibration_file: str = "", detect: bool = Tr
             "--marker-size", f"{float(settings['marker_size']):g}"]
     if settings.get("marker_ids"):
         args += ["--ids", *[str(int(i)) for i in settings["marker_ids"]]]
+    args += ["--min-side", f"{float(settings.get('min_marker_pixels', 30.0)):g}",
+             "--ambiguity-ratio", f"{float(settings.get('ambiguity_ratio', 2.0)):g}"]
     if calibration_file:
         from .aruco import intrinsics_of_file
 

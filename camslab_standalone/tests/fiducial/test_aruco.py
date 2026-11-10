@@ -59,6 +59,21 @@ def test_pose_history_interpolates_between_samples():
     assert history.at(0.05) is None            # older than the horizon, dropped
 
 
+def test_pose_history_gives_the_turning_rate():
+    history = PoseHistory(horizon=2.0)
+    assert history.angular_speed(0.0) is None
+    for k in range(101):                    # 1 s at 100 Hz, turning at 0.8 rad/s
+        t = 0.01 * k
+        T = np.eye(4)
+        T[:3, :3] = Rotation.from_euler("z", 0.8 * t).as_matrix()
+        history.push(t, T)
+    assert history.angular_speed(0.5) == pytest.approx(0.8)
+    # at the ends the interval is cut to the stored poses
+    assert history.angular_speed(1.0) == pytest.approx(0.8)
+    assert history.angular_speed(0.0) == pytest.approx(0.8)
+    assert history.angular_speed(5.0) is None
+
+
 def test_nominal_intrinsics_span_the_field_of_view():
     K = nominal_intrinsics(640, 480, 90.0)
     assert K[0, 2] == 320.0 and K[1, 2] == 240.0 and K[0, 0] == K[1, 1]
