@@ -5,13 +5,18 @@ a USB camera on the car, ArUco markers in the lab, and the motion capture for th
 pose. It follows the Yahboom ROSMASTER R2 vision guide (Daniel Xie, June 2026) for the
 robot side and replaces its ArUco detector and follower with the surveying pipeline:
 
-    on the car:   USB camera -> car_node.py (OpenCV, ArUco) -> /<name>/observations, /<name>/preview
-    here:         motion capture -> vrpn_mocap -> /<name>/pose
-                  observations + pose -> estimator -> /<name>/estimate -> web UI, RViz
+```{image} images/survey-system.svg
+:alt: The camera node and the command relay run on the car; the estimator, the motion capture client, the controller, RViz and the web UI run on this computer. Observations and the preview go from the car to this computer over the lab WiFi, cmd_vel goes back.
+:width: 100%
+```
 
-The car runs one node, which reads the camera, detects the markers and streams their
-poses in the camera frame plus a low-rate JPEG preview; no image stream crosses the
-network. Everything else, the data capture included, runs on your computer.
+The topics are in the namespace `/<name>`; `driver_cmd_vel` is the topic of the car's
+own driver. The car runs two uploaded files. The camera node reads the camera, detects
+the markers and streams their poses in the camera frame plus a low-rate JPEG preview; no
+image stream crosses the network. The command relay passes the controller's commands to
+the car's driver and stops the car when they stop arriving
+([Driving and safety](#driving-and-safety)); it runs only with `drive: true`. Everything
+else, the data capture included, runs on your computer.
 
 The estimator identifies the camera extrinsic `X = R_T_C` and the pose of every marker
 while the car drives. Nothing has to be known about the camera mounting or the marker
