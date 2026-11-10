@@ -46,7 +46,8 @@ def batch_fit(data: list, heights: dict, n: int, noise: Noise, start: np.ndarray
     against the measured one, rotations by the chordal distance ||R_pred - R_obs||_F,
     plus the known heights. Residuals are weighted by the noise standard deviations, so
     (J^T J)^-1 at the optimum is the covariance of the fit. Returns {"estimate",
-    "cov", "sigma_min": smallest singular value of J, "cost"}."""
+    "cov", "sigma_min": smallest singular value of J, "cost", "rms_position" [m] and
+    "rms_rotation" [rad]: the root mean square of the observation residuals per axis}."""
     R_R, p_R, who, R_obs, t_obs = [], [], [], [], []
     for T_R, observations in data:
         for j, T in observations.items():
@@ -82,7 +83,21 @@ def batch_fit(data: list, heights: dict, n: int, noise: Noise, start: np.ndarray
     J = fit.jac
     s = np.linalg.svd(J, compute_uv=False)
     cov = np.linalg.pinv(J.T @ J)
-    return {"estimate": fit.x, "cov": cov, "sigma_min": float(s[-1]), "cost": float(fit.cost)}
+    count = 9 * len(who)
+    rms_rotation = float(np.sqrt(np.mean((fit.fun[:count] / w_rot) ** 2) * 3.0) / np.sqrt(2.0))
+    rms_position = float(np.sqrt(np.mean((fit.fun[count:count + 3 * len(who)] / w_pos) ** 2)))
+    return {"estimate": fit.x, "cov": cov, "sigma_min": float(s[-1]), "cost": float(fit.cost),
+            "rms_position": rms_position, "rms_rotation": rms_rotation}
+
+
+def batch_radii(cov: np.ndarray, n: int) -> list:
+    """The four covariance radii of a batch fit's covariance, in the order of
+    ERROR_FIELDS: camera orientation, camera position, and the largest marker
+    orientation and position."""
+    P_t = [cov[6 + 3 * n + 3 * j:9 + 3 * n + 3 * j, 6 + 3 * n + 3 * j:9 + 3 * n + 3 * j] for j in range(n)]
+    P_m = [cov[6 + 3 * j:9 + 3 * j, 6 + 3 * j:9 + 3 * j] for j in range(n)]
+    return [covariance_radius(cov[0:3, 0:3]), covariance_radius(cov[3:6, 3:6]),
+            max(map(covariance_radius, P_m)), max(map(covariance_radius, P_t))]
 
 
 def verify(params: Params, initial: State, scene: Scene | None = None, dt: float = 0.02,
@@ -100,12 +115,6 @@ def verify(params: Params, initial: State, scene: Scene | None = None, dt: float
     from_online = batch_fit(observer.data, observer.estimator.heights, n, noise, online)
     from_zero = batch_fit(observer.data, observer.estimator.heights, n, noise, np.zeros_like(online))
 
-    def radii(cov):
-        P_t = [cov[6 + 3 * n + 3 * j:9 + 3 * n + 3 * j, 6 + 3 * n + 3 * j:9 + 3 * n + 3 * j] for j in range(n)]
-        P_m = [cov[6 + 3 * j:9 + 3 * j, 6 + 3 * j:9 + 3 * j] for j in range(n)]
-        return [covariance_radius(cov[0:3, 0:3]), covariance_radius(cov[3:6, 3:6]),
-                max(map(covariance_radius, P_m)), max(map(covariance_radius, P_t))]
-
     print(f"{params.shape} a={params.a} b={params.b}, {len(observer.data)} samples, "
           f"{sum(len(o) for _, o in observer.data)} observations, "
           f"online laws ready={observer.estimator.ready()}")
@@ -114,7 +123,7 @@ def verify(params: Params, initial: State, scene: Scene | None = None, dt: float
     print(f"{'online radius':20s} " + " ".join(f"{v:10.2e}" for v in online_radii))
     print(f"{'batch from online':20s} " + " ".join(f"{v:10.2e}" for v in errors(from_online["estimate"], truth, n)))
     print(f"{'batch from zero':20s} " + " ".join(f"{v:10.2e}" for v in errors(from_zero["estimate"], truth, n)))
-    print(f"{'batch radius':20s} " + " ".join(f"{v:10.2e}" for v in radii(from_online["cov"])))
+    print(f"{'batch radius':20s} " + " ".join(f"{v:10.2e}" for v in batch_radii(from_online["cov"], n)))
     s_min = from_online["sigma_min"]
     print(f"batch Jacobian: smallest singular value {s_min:.3e}"
           + ("  (a direction of the parameters is not determined by this track)" if s_min < 1e-3 else ""))

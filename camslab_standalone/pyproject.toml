@@ -9,6 +9,7 @@ dependencies = [
     "matplotlib",
     "camslab",
     "camslab-webui",
+    "rosbags>=0.11.9",
 ]
 
 [dependency-groups]

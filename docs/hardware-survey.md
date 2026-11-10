@@ -448,11 +448,35 @@ know. Two ways to get them:
   origin at the marker centre. Its pose is the true `Y_j`, and the marker position error
   `||t~_j||` follows directly. This is the Vicon integration of the vision guide's future
   work.
-- Replay a recorded run through `camslab_standalone.fiducial.offline`'s batch least
-  squares. The batch optimum over all observations is a reference for the online estimate
-  even without a truth, and the two should agree inside the covariance radius.
+- Fit a recorded run in a batch. The least squares over all observations is a reference
+  for the online estimate even without a truth, and the online estimate must end inside
+  its covariance radius of it.
 
-Record a run with `ros2 bag record /<name>/pose /<name>/observations /<name>/estimate`.
+Record a run with
+
+    ros2 bag record /<name>/pose /<name>/observations /<name>/estimate
+
+and fit it, on any computer, without ROS:
+
+    cd camslab_standalone
+    uv run python -m camslab_standalone.fiducial.recorded <bag directory>
+
+It takes the robot pose at each image time minus `camera_delay` and skips the images
+above `max_yaw_rate`, as the estimator node does, with the marker ids and heights of
+`survey.yaml`. It prints:
+
+- the images used, skipped and without a marker, and the images per marker,
+- the residuals of the fit, which are the scatter of this camera's marker positions and
+  orientations and replace the 13 mm and 0.7 degrees assumed from rendered images,
+- the batch estimate and its covariance radii, the online radii and the distance of the
+  online estimate to the batch one at the end of the run,
+- the position residual for camera delays from 0.10 s below to 0.10 s above
+  `camera_delay`. The delay with the lowest residual is the delay of this camera; set
+  `camera_delay` to it. The residual depends on the delay only where the car moves.
+
+The figure is the distance of the online estimate to the batch optimum over the run,
+with the online radius dashed. A marker of `marker_ids` that no used image shows is left
+out of the fit and named.
 
 ## Frames
 
