@@ -1,96 +1,44 @@
 # Settings of survey.launch.py: fiducial surveying on a real car with a USB camera and the
-# lab motion capture (camslab.fiducial on hardware). Pass another file with
-# config:=/path/to/file.yaml; a launch argument with the same name overrides a top-level
-# value: name:=yahboom1. The estimator gains are in fiducial.yaml.
+# lab motion capture (docs/hardware-survey.md). This file holds what changes between cars
+# and sessions. What is the same for every car of the lab (the camera format, the printed
+# markers, the detection limits, the ports) is in camslab.car.DEFAULTS; one of those keys
+# set here replaces the value there. Pass another file with config:=/path/to/file.yaml;
+# a launch argument with the same name overrides a top-level value: name:=bodies.
 
-name: angostura                  # ROS namespace: the pose arrives on /<name>/pose
-
-# Pose, through vrpn_mocap. The rigid body is streamed with Z up; its frame is the robot
-# frame of the paper, x forward, at the rear-axle centre.
-mocap_server: 129.97.71.49
-mocap_port: 3883
-tracker: ""                      # rigid body name in the mocap software; empty for `name`
-
-# The car. With camera_host set, survey.launch.py and `ros2 run camslab car` upload the
-# camera node (camslab/car_node.py) to the car and start it over ssh (inside its ROS
-# container when `container` is set, after `ros2 run camslab car setup` installed the ssh
-# key); it streams the marker poses and a preview, and everything else runs on this
-# computer. Empty: the camera node runs here, where the camera is plugged in.
+# The car: its ROS namespace and rigid body name in the motion capture, its ssh address
+# and its camera calibration in config/cameras/.
+name: angostura
 camera_host: jetson@192.168.1.85
+camera: angostura_640x480
 
-container: yahboom_robot         # Docker container with ROS on the car; empty: none
-ros_distro: humble               # ROS on the car
+mocap_server: 129.97.71.49       # the lab's VRPN server
+camera_delay: 0.05               # image latency [s]; the batch check of a recorded run prints this camera's
 
-# Camera, opened by the camera node with OpenCV. `camera` names a calibration in
-# config/cameras/ (written by `ros2 run camslab car calibrate`, docs/hardware-survey.md)
-# or is a path to one; its image size must match image_width and image_height.
-video_device: /dev/video0
-image_width: 640
-image_height: 480
-framerate: 30.0
-pixel_format: yuyv
-camera: angostura_640x480        # e.g. yahboom_r2_640x480; empty: no calibration, see nominal_fov
-nominal_fov: 60.0                # without a calibration: horizontal field of view [deg]; 0 requires one
-camera_delay: 0.05               # image latency: the pose is taken this long before the stamp [s]
-max_yaw_rate: 0.5                # the estimator skips an image taken while the car turned faster [rad/s]; 0: none
-preview_rate: 2.0                # JPEG frames per second streamed from the car on preview/compressed
+# Driving. The path controller runs on this computer, disabled until Start is pressed in
+# the web UI. Its commands reach the car's driver through the command relay on the car,
+# which sends zero once no command arrived for 0.5 s. driver_cmd_vel is the Twist topic
+# the car's driver listens on (`ros2 topic list` on the car while the driver runs). With
+# drive false nothing here commands the car.
+drive: true
+driver_cmd_vel: /cmd_vel
 
-# Markers: cv2.aruco dictionary, printed side [m], the ids in the lab (the camera node
-# publishes only these; hardware/marker_mounts/markers.pdf prints ids 0 to 3), and the
-# height of each marker's centre above the mocap floor [m]; only the heights flagged known
-# reach the estimator (at least one must be known, Assumption 3 of the paper). Measure the
-# heights once the stands are placed (hardware/marker_mounts/README.md has the nominal ones).
-dictionary: DICT_4X4_50
-marker_size: 0.14
+# The path, on top of params.yaml: a bowtie, fitted into the safe area. Whenever the safe
+# area is set in the web UI, and at every launch with a saved one, the centre, the
+# direction and the size of the bowtie are set to the largest one that fits, at most 4 m
+# by 2 m, driven at 0.14 m/s (0.42 rad/s in the corners). Nothing about the path is set
+# here but the car's limits. The car starts at the centre of the area, along a diagonal.
+controller:
+  shape: bowtie
+  period: 80.0                   # [s], until a safe area is set
+  kappa_max: 2.9                 # the R2's steering limit [1/m]; the corners are arcs of this curvature
+  v_max: 0.4                     # [m/s], also the relay's limit on the car
+  w_max: 2.0                     # [rad/s], also the relay's limit on the car
+
+# The markers: ids 0 to 3 of hardware/marker_mounts/markers.pdf, the height of each
+# marker's centre above the motion capture's z = 0 plane [m], and which heights the
+# estimator may use (at least one). The heights are the nominal ones of the stands;
+# measure them once the stands are placed. Put one stand about half a metre past each
+# corner of the bowtie, facing the car that drives toward the corner.
 marker_ids: [0, 1, 2, 3]
-# Which detections become observations (docs/hardware-survey.md, "Which images are used").
-# The camera node drops a marker whose shortest side in the image is under
-# min_marker_pixels, and one whose second planar pose solution has a reprojection error
-# under ambiguity_ratio times that of the first. 0 switches a check off.
-min_marker_pixels: 30.0
-ambiguity_ratio: 2.0
 marker_height: [0.10, 0.09, 0.14, 0.13]
 marker_height_known: [true, true, true, false]
-# Where the stands are planned to stand, one per marker id: the stand of
-# hardware/marker_mounts, its position [m] and the direction its marker faces [deg] in
-# motion capture coordinates. Only the rehearsal reads this
-# (`uv run python -m camslab_standalone.fiducial.rehearsal`); the survey estimates the
-# poses. One stand beyond each corner of the bowtie, 0.75 m or more from the path. Move
-# them with x0, y0 and theta0 when the path moves.
-stands:
-  - {stand: upright, x: -0.75, y: 1.95, facing: -30}
-  - {stand: overhang, x: 4.75, y: 1.70, facing: -150}
-  - {stand: diamond, x: -0.50, y: -0.80, facing: 120}
-  - {stand: faceup, x: 4.50, y: -1.05, facing: 120}
-
-# Driving. With drive true the path controller runs on this computer, disabled until
-# Start is pressed in the web UI, where the path and the safe area are set too. Its
-# commands go to /<name>/cmd_vel; the command relay that survey.launch.py starts on the
-# car (camslab/car_drive.py) passes them to driver_cmd_vel, the topic of the car's own
-# driver, and sends zero once no command arrived for command_timeout. The driver itself
-# is not started from here. With drive false the car is driven by its own teleop.
-drive: true
-driver_cmd_vel: /cmd_vel         # the Twist topic the car's driver listens on (`ros2 topic list` on the car)
-command_timeout: 0.5             # the relay stops the car when the newest command is older [s]
-
-# Controller parameters for the survey, on top of params.yaml. The path is a bowtie: its
-# straight edges give the pure-translation pairs and its corners the rotation pairs. With
-# the real camera's limits a gerono gives no pure-translation pair, because the heading
-# never repeats while a marker is in view (docs/hardware-survey.md, "Rehearsal"). A lap
-# of 80 s is 0.14 m/s and 0.42 rad/s in the corners, under max_yaw_rate, so the images
-# of the corners are used. v_max and w_max are also the relay's limits on the car.
-controller:
-  kappa_max: 2.9                 # the R2's steering limit [1/m]; the corners are arcs of this curvature
-  shape: bowtie
-  x0: 2.0                        # centre [m]
-  y0: 1.0
-  theta0: 0.0
-  a: 2.0                         # half the long side [m]: corners at (x0 +- a, y0 +- b)
-  b: 1.0                         # half the short side [m]
-  period: 80.0                   # [s]
-  v_max: 0.4                     # [m/s]
-  w_max: 2.0                     # [rad/s]
-
-rviz: true
-webui: true                      # web UI on `port`
-port: 8000

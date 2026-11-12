@@ -22,6 +22,7 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 from camslab import car
+from camslab_webui import polytope as safe_area
 
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import camslab_settings
@@ -77,7 +78,7 @@ def rviz_config(share, name, drive=False):
 
 def survey(context):
     share = get_package_share_directory("camslab")
-    settings = camslab_settings.load(context)
+    settings = camslab_settings.load(context, car.DEFAULTS)
     name = str(settings["name"])
     if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
         raise RuntimeError(f"robot name {name!r} must match [a-z][a-z0-9_]*")
@@ -114,7 +115,11 @@ def survey(context):
                           "marker_height": [float(h) for h in settings["marker_height"]],
                           "marker_height_known": [bool(k) for k in settings["marker_height_known"]],
                           "camera_delay": float(settings["camera_delay"]),
-                          "max_yaw_rate": float(settings.get("max_yaw_rate", 0.0))}]),
+                          "max_yaw_rate": float(settings["max_yaw_rate"]),
+                          "straight_tol": float(settings["straight_tol"]),
+                          "marker_position_noise": float(settings["marker_position_noise"]),
+                          "marker_rotation_noise": float(settings["marker_rotation_noise"]),
+                          "marker_height_noise": float(settings["marker_height_noise"])}]),
     ]
     drive = bool(settings.get("drive"))
     bridge = {"backend_label": f"Fiducial survey, {name}", "port": int(settings["port"]),
@@ -122,6 +127,19 @@ def survey(context):
     if drive:
         # The controller never starts by itself on the car: Start in the web UI enables it.
         polytope = LaunchConfiguration("polytope").perform(context)
+        # The path is the largest bowtie that fits in the saved safe area; the web UI
+        # fits it again whenever the area is set.
+        controller = dict(settings.get("controller") or {})
+        corners, margin = safe_area.read_file(polytope)
+        if corners:
+            try:
+                controller.update(safe_area.fit_bowtie(corners, margin,
+                                                       float(controller.get("kappa_max", 2.9))))
+            except ValueError as exc:
+                print(f"survey: {exc}; set the safe area again in the web UI")
+        else:
+            print("survey: no safe area yet; set it in the web UI, the bowtie is fitted into it")
+        settings = {**settings, "controller": controller}
         files = [LaunchConfiguration("params").perform(context),
                  camslab_settings.controller_file(settings)]
         if polytope and os.path.isfile(polytope):
@@ -135,7 +153,7 @@ def survey(context):
         else:
             actions.append(Node(package="camslab", executable="car_drive", name="drive",
                                 output="screen", arguments=car.drive_arguments(settings)))
-        bridge.update({"start_enabled": False, "polytope_file": polytope})
+        bridge.update({"start_enabled": False, "polytope_file": polytope, "fit_bowtie": True})
     if settings["rviz"]:
         actions.append(Node(package="rviz2", executable="rviz2", output="log",
                             arguments=["-d", rviz_config(share, name, drive)]))
@@ -148,7 +166,8 @@ def survey(context):
 def generate_launch_description():
     share = get_package_share_directory("camslab")
     return LaunchDescription([
-        *camslab_settings.arguments(os.path.join(share, "config", "survey.yaml")),
+        *camslab_settings.arguments(os.path.join(share, "config", "survey.yaml"),
+                                    car.DEFAULTS),
         DeclareLaunchArgument("params", default_value=os.path.join(share, "config", "params.yaml"),
                               description="controller parameter file"),
         DeclareLaunchArgument("polytope",

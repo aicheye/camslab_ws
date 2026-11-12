@@ -30,10 +30,9 @@ import os
 from dataclasses import dataclass, fields as dataclass_fields
 
 import numpy as np
-import yaml
 
 import camslab
-from camslab import fiducial
+from camslab import car, fiducial
 from camslab.aruco import intrinsics_of_file, marker_corners, nominal_intrinsics
 from camslab.fiducial import Marker, Noise, Scene, rotation_angle, rpy_rotation
 from camslab.trajectory import make_shape, reference
@@ -161,7 +160,7 @@ def camera_intrinsics(settings: dict) -> np.ndarray:
     camera = str(settings.get("camera") or "")
     width, height = int(settings["image_width"]), int(settings["image_height"])
     if not camera:
-        return nominal_intrinsics(width, height, float(settings["nominal_fov"]))
+        return nominal_intrinsics(width, height, float(settings.get("nominal_fov") or 60.0))
     path = (os.path.expanduser(camera) if os.sep in camera or camera.endswith(".yaml")
             else os.path.join(config_dir(), "cameras", f"{camera}.yaml"))
     K, _, _ = intrinsics_of_file(path)
@@ -174,18 +173,50 @@ def survey_params(settings: dict) -> Params:
     values = {k: v for k, v in (settings.get("controller") or {}).items() if k in names}
     if "control_points" in values:
         values["control_points"] = tuple(values["control_points"])
+    # Without a direction, the one the fit takes for an area along the x axis (fit_bowtie).
+    values.setdefault("theta0", math.pi)
     return Params(**values)
+
+
+BEYOND = 0.6    # how far past a corner a stand is put [m]
+
+
+def corner_stands(params: Params, beyond: float = BEYOND) -> list:
+    """The stands as the guide places them: one past each corner of the bowtie, on the
+    line the car arrives on, facing the car. In the frame of the path."""
+    a, b = params.a, params.b
+    diagonal = math.atan2(b, a)
+    u = beyond * math.cos(diagonal), beyond * math.sin(diagonal)
+    return [{"stand": "upright", "x": -a - u[0], "y": b + u[1], "facing": -math.degrees(diagonal)},
+            {"stand": "overhang", "x": a + u[0], "y": b + u[1], "facing": math.degrees(diagonal) - 180.0},
+            {"stand": "diamond", "x": -a, "y": -b - beyond, "facing": 90.0},
+            {"stand": "faceup", "x": a, "y": -b - beyond, "facing": 90.0}]
+
+
+def placed_stands(settings: dict) -> list:
+    """The stands in motion capture coordinates, as {stand, x, y, facing}: those of
+    corner_stands(), or of a `stands` setting, which gives each position [m] and facing
+    [deg] in the frame of the path. Its origin is the path's centre (x0, y0) and its x
+    axis points along theta0, so the layout moves and turns with the path."""
+    ids = settings["marker_ids"]
+    stands = settings.get("stands") or corner_stands(survey_params(settings))[:len(ids)]
+    if len(stands) != len(ids):
+        raise ValueError(f"`stands` has {len(stands)} entries, marker_ids has {len(ids)}; the "
+                         "rehearsal needs one planned stand per marker")
+    params = survey_params(settings)
+    c, s = math.cos(params.theta0), math.sin(params.theta0)
+    return [{"stand": str(stand["stand"]),
+             "x": params.x0 + c * float(stand["x"]) - s * float(stand["y"]),
+             "y": params.y0 + s * float(stand["x"]) + c * float(stand["y"]),
+             "facing": math.degrees(params.theta0) + float(stand["facing"])}
+            for stand in stands]
 
 
 def survey_scene(settings: dict) -> CameraScene:
     """The planned stands of the settings in front of the car's camera."""
-    ids, stands = settings["marker_ids"], settings.get("stands") or []
-    if len(stands) != len(ids):
-        raise ValueError(f"`stands` has {len(stands)} entries, marker_ids has {len(ids)}; the "
-                         "rehearsal needs one planned stand per marker")
-    markers = [stand_marker(str(s["stand"]), float(s["x"]), float(s["y"]),
-                            math.radians(float(s["facing"])), float(h), bool(k))
-               for s, h, k in zip(stands, settings["marker_height"], settings["marker_height_known"])]
+    markers = [stand_marker(s["stand"], s["x"], s["y"], math.radians(s["facing"]), float(h), bool(k))
+               for s, h, k in zip(placed_stands(settings), settings["marker_height"],
+                                  settings["marker_height_known"])]
     return CameraScene(camera_cayley=CAMERA_CAYLEY, camera_position=CAMERA_POSITION,
                        markers=markers, K=camera_intrinsics(settings),
                        width=int(settings["image_width"]), height=int(settings["image_height"]),
@@ -200,7 +231,8 @@ def rehearse(settings: dict, laps: int = LAPS, dt: float = 0.05, seed: int = 0,
     params = survey_params(settings)
     scene = survey_scene(settings)
     observer = Rehearsal(scene, float(settings.get("max_yaw_rate", 0.0)), noise=noise,
-                         rng=np.random.default_rng(seed))
+                         rng=np.random.default_rng(seed),
+                         straight_tol=float(settings.get("straight_tol", car.DEFAULTS["straight_tol"])))
     start = reference(make_shape(params), 0.0)
     initial = State(p=np.array(start.p, float), q=np.array(start.q, float))
     rows = np.array(simulate(initial, params, dt, laps * params.period, observer), dtype=float)
@@ -211,7 +243,7 @@ def rehearse(settings: dict, laps: int = LAPS, dt: float = 0.05, seed: int = 0,
     estimator = observer.estimator
     return {
         "params": params, "scene": scene, "ids": [int(i) for i in settings["marker_ids"]],
-        "stands": settings["stands"], "time": rows[:, 0], "position": rows[:, 1:3],
+        "stands": placed_stands(settings), "time": rows[:, 0], "position": rows[:, 1:3],
         "used": used, "turning": observer.turning,
         "speed": float(np.abs(rows[:, 5]).max()),
         "yaw_rate": float(np.abs(np.gradient(heading, rows[:, 0])).max()),
@@ -299,8 +331,7 @@ def main(argv=None):
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out", metavar="PNG", help="write the floor plan instead of showing it")
     args = ap.parse_args(argv)
-    with open(os.path.join(config_dir(), "survey.yaml")) as f:
-        settings = yaml.safe_load(f)
+    settings = car.load_settings(os.path.join(config_dir(), "survey.yaml"))
     try:
         result = rehearse(settings)
     except ValueError as e:

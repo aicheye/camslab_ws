@@ -34,7 +34,7 @@ rebuild.
 | `period` | lap duration for non-circles [s] | `40.0` |
 | `phi0` | Gerono or ellipse starting phase [rad] | `0.0` |
 | `control_points` | flat `[x0, y0, ...]` spline list; at least 4 points | see YAML |
-| `t_max` | reference and limit-check duration [s] | `60.0` |
+| `t_max` | duration of the drawn path and of the limit and safe-area checks [s]; one lap when the lap is longer | `60.0` |
 | `k_par`, `k_perp`, `k_q` | controller gains | `1.0`, `4.0`, `2.0` |
 | `v_max` | forward-speed limit [m/s] | `0.6` |
 | `w_max` | turning-rate limit [rad/s] | `2.0` |

@@ -1,6 +1,7 @@
 """Safety polytope from the web UI: convex hull of the corners and its parameter file."""
 
 import datetime
+import math
 import os
 
 
@@ -48,3 +49,87 @@ def write_file(path, corners, margin):
     polytope: [{flat}]
     polytope_margin: {float(margin)}
 """)
+
+
+def signed_distance(corners, p):
+    """Distance of p to the nearest edge of the counter-clockwise convex polygon
+    `corners`, positive inside."""
+    d = math.inf
+    for (x0, y0), (x1, y1) in zip(corners, corners[1:] + corners[:1]):
+        ex, ey = x1 - x0, y1 - y0
+        d = min(d, (ex * (p[1] - y0) - ey * (p[0] - x0)) / math.hypot(ex, ey))
+    return d
+
+
+def fit_bowtie(corners, margin, kappa_max, a_max=2.0, aspect=0.5, speed=0.14, slack=0.05):
+    """Controller parameters of the largest bowtie inside the safety polytope `corners`
+    (counter-clockwise, convex): {shape, x0, y0, theta0, a, b, period}.
+
+    The centre is the centroid of the polygon and the long side runs along its longest
+    edge. The corners (+-a, +-b) with b = aspect * a keep margin + slack from every edge;
+    the path itself is inside them because its corners are arcs. a is at most a_max and
+    at least what the corner arcs of curvature kappa_max need. The lap time gives about
+    `speed` m/s. A ValueError says by how much the area is too small.
+
+    Of the two directions along the longest edge, the one is taken in which a stand
+    that faces the car arriving at a corner faces farthest from the +y axis of the
+    frame: the estimator's marker orientation is singular for a rotation by 180 degrees
+    from the frame, which an upright marker facing +y has."""
+    pts = [(float(x), float(y)) for x, y in corners]
+    area = cx = cy = 0.0
+    longest, theta = 0.0, 0.0
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1]):
+        w = x0 * y1 - x1 * y0
+        area, cx, cy = area + w, cx + (x0 + x1) * w, cy + (y0 + y1) * w
+        if math.hypot(x1 - x0, y1 - y0) > longest:
+            longest, theta = math.hypot(x1 - x0, y1 - y0), math.atan2(y1 - y0, x1 - x0)
+    cx, cy = cx / (3.0 * area), cy / (3.0 * area)
+    diagonal = math.atan(aspect)
+
+    def from_plus_y(theta0):
+        facings = (theta0 + math.pi + diagonal, theta0 - diagonal, theta0 + math.pi / 2)
+        return min(abs(math.remainder(f - math.pi / 2, 2 * math.pi)) for f in facings)
+
+    theta0 = max((theta, theta + math.pi), key=from_plus_y)
+    theta0 = math.remainder(theta0, 2 * math.pi)
+    c, s = math.cos(theta0), math.sin(theta0)
+
+    def clearance(a):
+        b = aspect * a
+        return min(signed_distance(pts, (cx + c * u - s * v, cy + s * u + c * v))
+                   for u in (-a, a) for v in (-b, b))
+
+    need = margin + slack
+    a_min = math.tan(math.pi / 4 + diagonal / 2) / (kappa_max * aspect)
+    if clearance(a_min) < need:
+        raise ValueError(
+            f"the safe area is too small for a bowtie: the smallest one, {2 * a_min:.1f} m by "
+            f"{2 * aspect * a_min:.1f} m, comes within {clearance(a_min):.2f} m of its edge "
+            f"and needs {need:.2f} m. An area of {2 * (a_min + need):.1f} m by "
+            f"{2 * (aspect * a_min + need):.1f} m is enough")
+    low, high = a_min, a_max
+    if clearance(high) < need:
+        for _ in range(40):
+            mid = 0.5 * (low + high)
+            low, high = (mid, high) if clearance(mid) >= need else (low, mid)
+        high = low
+    a = math.floor(high * 100.0) / 100.0 if high > a_min + 0.01 else high
+    b = aspect * a
+    # length of the lap: two diagonals and two short sides, each corner cut by an arc
+    turn = math.pi / 2 + diagonal
+    radius = 1.0 / kappa_max
+    lap = 4.0 * math.hypot(a, b) + 4.0 * b - 4.0 * radius * (2.0 * math.tan(turn / 2) - turn)
+    return {"shape": "bowtie", "x0": round(cx, 3), "y0": round(cy, 3), "theta0": round(theta0, 4),
+            "a": float(a), "b": float(b), "period": round(lap / speed, 1)}
+
+
+def read_file(path):
+    """(corners, margin) of a file written by write_file, or ([], 0.2) without one."""
+    import yaml
+
+    if not path or not os.path.isfile(path):
+        return [], 0.2
+    with open(path) as f:
+        values = (yaml.safe_load(f) or {}).get("/**/controller", {}).get("ros__parameters", {})
+    xy = [float(v) for v in values.get("polytope") or []]
+    return [xy[i:i + 2] for i in range(0, len(xy) - 1, 2)], float(values.get("polytope_margin", 0.2))

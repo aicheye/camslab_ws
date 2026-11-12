@@ -80,7 +80,7 @@ def camera_action(settings, calibration_file):
 
 
 def camera_test(context):
-    settings = camslab_settings.load(context)
+    settings = camslab_settings.load(context, car.DEFAULTS)
     name = str(settings["name"])
     if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
         raise RuntimeError(f"robot name {name!r} must match [a-z][a-z0-9_]*")
@@ -96,6 +96,7 @@ def camera_test(context):
 def generate_launch_description():
     share = get_package_share_directory("camslab")
     return LaunchDescription([
-        *camslab_settings.arguments(os.path.join(share, "config", "survey.yaml")),
+        *camslab_settings.arguments(os.path.join(share, "config", "survey.yaml"),
+                                    car.DEFAULTS),
         OpaqueFunction(function=camera_test),
     ])

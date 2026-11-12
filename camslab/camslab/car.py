@@ -72,14 +72,50 @@ def default_settings_file() -> str:
     return os.path.join(get_package_share_directory("camslab"), "config", "survey.yaml")
 
 
+# The settings that are the same for every car and every survey in the lab. survey.yaml
+# holds what changes between cars and sessions; one of these keys set there, or as
+# key:=value on a command line, replaces the value here.
+DEFAULTS = {
+    "mocap_port": 3883,
+    "tracker": "",                  # rigid body name in the mocap software; empty for `name`
+    "container": "yahboom_robot",   # Docker container with ROS on the car; empty: none
+    "ros_distro": "humble",         # ROS on the car
+    # The camera of the lab's cars, as `v4l2-ctl --list-formats-ext` reports it.
+    "video_device": "/dev/video0", "image_width": 640, "image_height": 480,
+    "framerate": 30.0, "pixel_format": "yuyv",
+    "nominal_fov": 0.0,             # horizontal field of view [deg] used while `camera` is empty
+    "preview_rate": 2.0,            # JPEG frames per second streamed from the car
+    # The printed markers of hardware/marker_mounts/markers.pdf.
+    "dictionary": "DICT_4X4_50", "marker_size": 0.14,
+    # Which detections become observations: the shortest side in the image [px] and the
+    # ratio of the two planar pose solutions' reprojection errors; 0 switches a check off.
+    "min_marker_pixels": 30.0, "ambiguity_ratio": 2.0,
+    "max_yaw_rate": 0.5,            # the estimator skips an image taken in a faster turn [rad/s]
+    # A pure-translation pair is two robot poses that differ by less than this [rad].
+    # The simulation's 0.0005 rad is below the motion capture's orientation noise: with
+    # 0.1 deg of noise per axis and a heading that wanders by 2 deg the rehearsal stored
+    # no such pair and the camera orientation was not identified. With 0.01 rad it
+    # stored 75. The orientation bias is at most straight_tol |t_X| / displacement.
+    "straight_tol": 0.01,
+    # The measurement noise the covariance radii are computed for: the scatter of the
+    # camera's marker positions [m] and orientations [deg] per axis on rendered images,
+    # and the accuracy of the measured heights [m].
+    "marker_position_noise": 0.013, "marker_rotation_noise": 0.7, "marker_height_noise": 0.002,
+    "command_timeout": 0.5,         # the relay stops the car when the newest command is older [s]
+    "rviz": True, "webui": True, "port": 8000,
+}
+
+
 def load_settings(path: str, overrides=()) -> dict:
-    """The settings file with `key:=value` (or key=value) overrides, parsed as YAML."""
+    """DEFAULTS, then the settings file, then `key:=value` (or key=value) overrides,
+    parsed as YAML."""
     with open(path) as f:
-        settings = yaml.safe_load(f)
+        settings = {**DEFAULTS, **(yaml.safe_load(f) or {})}
     for item in overrides:
         key, sep, value = item.replace(":=", "=", 1).partition("=")
         if not sep or key not in settings:
-            raise SystemExit(f"{item!r}: expected key=value with a key of {path}")
+            raise SystemExit(f"{item!r}: expected key=value with a key of {path} or of "
+                             f"camslab.car.DEFAULTS")
         settings[key] = yaml.safe_load(value)
     return settings
 
@@ -367,7 +403,8 @@ class Watch:
             q = self.pose.orientation
             yaw = math.degrees(math.atan2(2 * (q.w * q.z + q.x * q.y),
                                           1 - 2 * (q.y * q.y + q.z * q.z)))
-            pose = f"x {self.pose.position.x:6.2f}  y {self.pose.position.y:6.2f}  yaw {yaw:4.0f} deg"
+            pose = (f"x {self.pose.position.x:6.2f}  y {self.pose.position.y:6.2f}  "
+                    f"yaw {yaw:4.0f} deg ({math.radians(yaw):5.2f} rad)")
         estimate = ""
         if self.estimate and len(self.estimate) >= 6:
             t = self.estimate[3:6]
@@ -607,6 +644,13 @@ def cmd_setup(settings: dict, args) -> int:
     if code != 0:
         print(f"  ...  ssh {host} without a password failed ({err or code}); installing "
               "this computer's key, enter the car's password:")
+        # A new computer or container has no key yet, and ssh-copy-id has nothing to copy.
+        ssh_dir = os.path.expanduser("~/.ssh")
+        if not any(name.endswith(".pub") for name in
+                   (os.listdir(ssh_dir) if os.path.isdir(ssh_dir) else [])):
+            os.makedirs(ssh_dir, mode=0o700, exist_ok=True)
+            subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "",
+                            "-f", os.path.join(ssh_dir, "id_ed25519")])
         if subprocess.run(["ssh-copy-id", host]).returncode != 0:
             check("ssh key", False, "", f"ssh-copy-id {host} failed")
             return 1

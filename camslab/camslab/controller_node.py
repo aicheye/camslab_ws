@@ -48,9 +48,17 @@ def make_polytope(xy) -> Polytope | None:
     return Polytope(xy) if xy else None
 
 
+def horizon(params: Params, t_max: float) -> float:
+    """The time the drawn path and its checks cover [s]: t_max, or one lap when the lap
+    is longer. Every shape but the circle repeats after `period`; with a lap of 80 s and
+    t_max = 60 s the last quarter of the lap was neither drawn nor checked against the
+    safety polytope."""
+    return t_max if params.shape == "circle" else max(t_max, params.period)
+
+
 def limit_warning(params: Params, t_max: float) -> str:
     try:
-        check_limits(make_shape(params), params, t_max)
+        check_limits(make_shape(params), params, horizon(params, t_max))
     except ValueError as exc:
         return str(exc)
     return ""
@@ -119,7 +127,8 @@ class ControllerNode(Node):
             shape = make_shape(params)
         except ValueError as exc:
             return str(exc)
-        return check_inside(shape, polytope, margin, t_max) if polytope else ""
+        return (check_inside(shape, polytope, margin, horizon(params, t_max))
+                if polytope else "")
 
     def set_trajectory(self, params: Params):
         self.params = params
@@ -138,10 +147,11 @@ class ControllerNode(Node):
         path = Path()
         path.header.stamp = self.get_clock().now().to_msg()
         path.header.frame_id = self.frame_id
+        t_end = horizon(params, self.t_max)
         for i in range(PATH_POINTS + 1):
             pose = PoseStamped()
             pose.header = path.header
-            p = self.shape.position(self.t_max * i / PATH_POINTS)
+            p = self.shape.position(t_end * i / PATH_POINTS)
             pose.pose.position.x = float(p[0])
             pose.pose.position.y = float(p[1])
             pose.pose.orientation.w = 1.0

@@ -1,4 +1,4 @@
-"""Settings files of gazebo_multi.launch.py and live.launch.py."""
+"""Settings files of the launch files."""
 
 import os
 import tempfile
@@ -9,10 +9,11 @@ from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 
 
-def arguments(default_file):
-    """The `config` launch argument and one override argument per top-level value."""
+def arguments(default_file, defaults=None):
+    """The `config` launch argument and one override argument per top-level value of the
+    file and of `defaults`, the values a file may leave out."""
     with open(default_file) as f:
-        settings = yaml.safe_load(f)
+        settings = {**(defaults or {}), **yaml.safe_load(f)}
     return [DeclareLaunchArgument("config", default_value=default_file,
                                   description="settings file")] + [
         DeclareLaunchArgument(key, default_value="",
@@ -20,10 +21,11 @@ def arguments(default_file):
         for key, value in settings.items() if not isinstance(value, (dict, list))]
 
 
-def load(context):
-    """The settings file named by `config`, with the overrides from the command line."""
+def load(context, defaults=None):
+    """`defaults`, then the settings file named by `config`, then the overrides from the
+    command line."""
     with open(LaunchConfiguration("config").perform(context)) as f:
-        settings = yaml.safe_load(f)
+        settings = {**(defaults or {}), **yaml.safe_load(f)}
     for key, value in settings.items():
         override = context.launch_configurations.get(key, "")
         if override != "" and not isinstance(value, (dict, list)):

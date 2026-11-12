@@ -24,9 +24,9 @@ import os
 from dataclasses import dataclass
 
 import numpy as np
-import yaml
 
 import camslab
+from camslab import car
 from camslab.aruco import log_rotation, rodrigues
 from camslab.fiducial import ERROR_FIELDS, RADIUS_FIELDS, Noise, errors, pose
 
@@ -335,8 +335,7 @@ def main(argv=None):
     ap.add_argument("bag", help="rosbag2 directory of the run")
     ap.add_argument("--out", metavar="PNG", help="write the figure instead of showing it")
     args = ap.parse_args(argv)
-    with open(default_settings_file()) as f:
-        settings = yaml.safe_load(f)
+    settings = car.load_settings(default_settings_file())
     try:
         result = analyse(read_bag(args.bag), settings)
     except ValueError as e:

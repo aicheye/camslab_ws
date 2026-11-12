@@ -24,7 +24,7 @@ from aruco_msgs.msg import MarkerArray as ArucoMarkers
 from visualization_msgs.msg import Marker, MarkerArray
 
 from . import adaptive, fiducial
-from .aruco import PoseHistory
+from .aruco import Measurements
 from .types import Params
 
 PATH_NAMES = ("shape", "x0", "y0", "theta0", "kappa", "circle_speed", "a", "b", "period",
@@ -144,8 +144,8 @@ class EstimatorNode(Node):
         self.kind = str(self.param("estimator", "path"))
         self.sensor = str(self.param("sensor", "simulated"))
         self.frame = str(self.param("frame", "map"))
-        self.camera_delay = float(self.param("camera_delay", 0.0))
-        self.max_yaw_rate = float(self.param("max_yaw_rate", 0.0))
+        self.measurements = Measurements(float(self.param("camera_delay", 0.0)),
+                                         float(self.param("max_yaw_rate", 0.0)))
         self.path = {n: self.get_parameter(n).value for n in PATH_NAMES if self.has_parameter(n)}
 
         self.estimate_pub = self.create_publisher(Float64MultiArray, "estimate", 10)
@@ -159,13 +159,9 @@ class EstimatorNode(Node):
 
         self.pose = None
         self.pose_time = None
-        self.history = PoseHistory()
-        self.pending = None          # (image time, {j: C_T_Mj}) not yet given to the estimator
         self.marker_index = {}
         self.n = 0
         self.truth = None
-        self.warned_delay = False
-        self.used = self.turning = 0    # images given to the estimator and skipped in a turn
         self.last_report = None
         self.last_tick = None
         self.last_markers = -math.inf
@@ -221,9 +217,20 @@ class EstimatorNode(Node):
             self.n = len(ids)
             self.scene = None
             self.truth = None
+            # The measurement noise of this camera and of the measured heights, for the
+            # covariance radii; the robot pose keeps the motion capture values of Noise.
+            noise = fiducial.Noise(
+                marker_position=float(self.param("marker_position_noise", 0.013)),
+                marker_rotation=math.radians(float(self.param("marker_rotation_noise", 0.7))),
+                height=float(self.param("marker_height_noise", 0.002)))
             self.estimator = fiducial.Estimator(
-                self.n, {j: heights[j] for j in range(self.n) if known[j]}, **gains)
-            self.get_logger().info(f"fiducial estimator on ArUco markers {ids}")
+                self.n, {j: heights[j] for j in range(self.n) if known[j]}, noise=noise,
+                **gains)
+            self.get_logger().info(
+                f"fiducial estimator on ArUco markers {ids}; radii for a marker noise of "
+                f"{1e3 * noise.marker_position:g} mm and "
+                f"{math.degrees(noise.marker_rotation):g} deg, heights to "
+                f"{1e3 * noise.height:g} mm")
             return
         if self.sensor != "simulated":
             self.estimator = None
@@ -256,7 +263,7 @@ class EstimatorNode(Node):
         self.pose = msg
         self.pose_time = self.now()
         stamp = stamp_seconds(msg.header.stamp)
-        self.history.push(stamp if stamp > 0.0 else self.pose_time, pose_matrix(msg))
+        self.measurements.pose(stamp if stamp > 0.0 else self.pose_time, pose_matrix(msg))
 
     def on_observations(self, msg):
         """One camera image: the markers of marker_ids seen in it, keyed by their index."""
@@ -264,33 +271,7 @@ class EstimatorNode(Node):
         for marker in msg.markers:
             if int(marker.id) in self.marker_index:
                 found[self.marker_index[int(marker.id)]] = marker_matrix(marker)
-        if found:
-            self.pending = (stamp_seconds(msg.header.stamp), found)
-
-    def measurement(self):
-        """(W_T_R, {j: C_T_Mj}) for the next update with the ArUco sensor: the robot pose
-        at the image time of the newest observations, or the latest pose and no
-        observations when none arrived since the last update. An image taken while the
-        robot turned faster than max_yaw_rate is skipped: an error dt of the image time
-        moves a marker at distance z by z * yaw rate * dt, and the image is blurred."""
-        if self.pending is None:
-            return self.history.latest(), {}
-        stamp, found = self.pending
-        self.pending = None
-        if self.max_yaw_rate > 0.0:
-            rate = self.history.angular_speed(stamp - self.camera_delay)
-            if rate is not None and rate > self.max_yaw_rate:
-                self.turning += 1
-                return self.history.latest(), {}
-        self.used += 1
-        T_R = self.history.at(stamp - self.camera_delay)
-        if T_R is None:
-            if not self.warned_delay:
-                self.get_logger().warning("no robot pose at the image time; check the "
-                                          "clocks and camera_delay")
-                self.warned_delay = True
-            T_R = self.history.latest()
-        return T_R, found
+        self.measurements.image(stamp_seconds(msg.header.stamp), found)
 
     def on_parameter_event(self, event):
         """Follow trajectory changes made on this namespace's controller."""
@@ -323,11 +304,17 @@ class EstimatorNode(Node):
         if self.last_report is None:
             self.last_report = now
         elif now - self.last_report >= REPORT_PERIOD:
-            if self.turning:
+            m = self.measurements
+            if m.unpaired:
+                self.get_logger().warning(
+                    f"{m.unpaired} images dropped in the last {now - self.last_report:.0f} s: "
+                    "no robot pose at the image time; check the car's clock (`ros2 run "
+                    "camslab car setup`) and camera_delay")
+            if m.turning:
                 self.get_logger().info(
-                    f"{self.used} images used, {self.turning} skipped above "
-                    f"{self.max_yaw_rate:g} rad/s in the last {now - self.last_report:.0f} s")
-            self.used = self.turning = 0
+                    f"{m.used} images used, {m.turning} skipped above "
+                    f"{m.max_yaw_rate:g} rad/s in the last {now - self.last_report:.0f} s")
+            m.used = m.turning = m.unpaired = 0
             self.last_report = now
         try:
             self.step(now, dt)
@@ -348,7 +335,7 @@ class EstimatorNode(Node):
             T_R = pose_matrix(self.pose)
             observations = self.scene.observe(T_R)
         else:
-            T_R, observations = self.measurement()
+            T_R, observations = self.measurements.next()
             if T_R is None:
                 return
         self.estimator.update(T_R, observations, dt)

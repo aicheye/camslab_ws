@@ -32,9 +32,30 @@ def test_settings_overrides_are_parsed_as_yaml(tmp_path):
     path = tmp_path / "survey.yaml"
     path.write_text("name: angostura\nframerate: 30.0\nrviz: true\n")
     settings = car.load_settings(str(path), ["name:=yahboom1", "framerate=15", "rviz:=false"])
-    assert settings == {"name": "yahboom1", "framerate": 15, "rviz": False}
+    assert settings == {**car.DEFAULTS, "name": "yahboom1", "framerate": 15, "rviz": False}
+    assert car.load_settings(str(path), ["port:=1"])["port"] == 1      # a default, not in the file
     with pytest.raises(SystemExit):
-        car.load_settings(str(path), ["port:=1"])
+        car.load_settings(str(path), ["no_such_key:=1"])
+
+
+def test_the_settings_file_leaves_the_lab_wide_values_to_the_defaults():
+    """config/survey.yaml holds what changes between cars and sessions; what the
+    launch files and the car commands read besides is in car.DEFAULTS."""
+    import yaml
+
+    with open(car.default_settings_file()) as f:
+        file = yaml.safe_load(f)
+    assert not set(file) & set(car.DEFAULTS)
+    settings = car.load_settings(car.default_settings_file())
+    for key in ("name", "camera_host", "camera", "mocap_server", "mocap_port", "tracker",
+                "camera_delay", "max_yaw_rate", "straight_tol", "marker_ids", "marker_height",
+                "marker_height_known", "marker_size", "dictionary", "image_width", "drive",
+                "driver_cmd_vel", "command_timeout", "controller", "rviz", "webui", "port"):
+        assert key in settings, key
+    assert car.camera_file(settings).endswith("angostura_640x480.yaml")
+    args = car.node_arguments(settings, car.camera_file(settings))
+    assert args[args.index("--ids") + 1:args.index("--ids") + 5] == ["0", "1", "2", "3"]
+    assert args[args.index("--marker-size") + 1] == "0.14"
 
 
 def test_camera_node_command_carries_the_settings_and_the_calibration(monkeypatch, tmp_path):

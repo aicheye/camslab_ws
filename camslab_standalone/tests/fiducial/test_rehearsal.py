@@ -6,9 +6,8 @@ import os
 
 import numpy as np
 import pytest
-import yaml
 
-from camslab import car_node, fiducial
+from camslab import car, car_node, fiducial
 from camslab.aruco import nominal_intrinsics
 from camslab_standalone.fiducial import rehearsal
 
@@ -70,8 +69,7 @@ def test_a_marker_outside_the_image_or_seen_from_behind_is_not_accepted():
 
 
 def survey_settings():
-    with open(os.path.join(rehearsal.config_dir(), "survey.yaml")) as f:
-        return yaml.safe_load(f)
+    return car.load_settings(os.path.join(rehearsal.config_dir(), "survey.yaml"))
 
 
 def test_the_planned_stands_are_away_from_the_cayley_singularity_and_the_path():
@@ -84,11 +82,60 @@ def test_the_planned_stands_are_away_from_the_cayley_singularity_and_the_path():
     params = rehearsal.survey_params(settings)
     shape = rehearsal.make_shape(params)
     path = np.array([shape.position(t) for t in np.linspace(0.0, params.period, 801)])
-    for stand in settings["stands"]:
+    for stand in rehearsal.placed_stands(settings):
         distance = np.linalg.norm(path - [stand["x"], stand["y"]], axis=1).min()
-        assert distance >= 0.75
+        assert distance >= 0.5
     with pytest.raises(ValueError, match="one planned stand per marker"):
-        rehearsal.survey_scene({**settings, "stands": settings["stands"][:2]})
+        rehearsal.survey_scene({**settings, "stands": rehearsal.corner_stands(params)[:2]})
+
+
+def test_the_stands_are_past_the_corners_and_move_with_the_path():
+    """Without a `stands` setting the stands are where the guide puts them: past each
+    corner of the bowtie on the line the car arrives on, facing the car, in the frame
+    of the path."""
+    settings = survey_settings()
+    settings["controller"] = {**settings["controller"], "x0": 2.0, "y0": 1.0, "theta0": 0.0}
+    home = rehearsal.placed_stands(settings)
+    # past the corner (4, 0), which the car reaches driving in the -y direction
+    assert [home[3]["x"], home[3]["y"], home[3]["facing"]] == pytest.approx([4.0, -0.6, 90.0])
+    # past the corner (4, 2) on the diagonal from (0, 0)
+    d = math.atan2(1.0, 2.0)
+    assert [home[1]["x"], home[1]["y"]] == pytest.approx([4.0 + 0.6 * math.cos(d), 2.0 + 0.6 * math.sin(d)])
+    assert home[1]["facing"] == pytest.approx(math.degrees(d) - 180.0)
+    settings["controller"] = {**settings["controller"], "x0": -1.0, "y0": 3.0, "theta0": math.pi / 2}
+    moved = rehearsal.placed_stands(settings)
+    assert [moved[3]["x"], moved[3]["y"], moved[3]["facing"]] == pytest.approx([0.6, 5.0, 180.0])
+    planned = {**settings, "stands": [{"stand": "upright", "x": 1.0, "y": 0.0, "facing": 0.0}] * 4}
+    assert [rehearsal.placed_stands(planned)[0][k] for k in ("x", "y", "facing")] == pytest.approx([-1.0, 4.0, 90.0])
+
+
+def test_the_bowtie_is_fitted_into_the_safe_area():
+    """Setting the safe area sets the path: the largest bowtie inside it, centred, along
+    its longest edge, with the whole lap farther than the margin from every edge."""
+    from camslab.safety import Polytope, check_inside
+    from camslab.types import Params
+    from camslab_webui.polytope import convex_hull, fit_bowtie
+
+    def lap(corners, kappa_max=2.9):
+        hull = convex_hull(corners)
+        fitted = fit_bowtie(hull, 0.2, kappa_max)
+        params = Params(kappa_max=kappa_max, **fitted)
+        shape = rehearsal.make_shape(params)
+        assert check_inside(shape, Polytope([c for p in hull for c in p]), 0.2, params.period) == ""
+        assert shape.perimeter / params.period == pytest.approx(0.14, abs=0.002)
+        return fitted
+
+    big = lap([(-4, -3), (4, -3), (4, 3), (-4, 3)])
+    assert (big["x0"], big["y0"], big["a"], big["b"]) == (0.0, 0.0, 2.0, 1.0)
+    # along x: the direction in which no stand that faces the arriving car faces +y
+    assert abs(big["theta0"]) == pytest.approx(math.pi, abs=1e-3)
+    small = lap([(0, 0), (3.5, 0), (3.5, 2.5), (0, 2.5)])
+    assert (small["x0"], small["y0"]) == (1.75, 1.25) and 1.4 < small["a"] < 1.5
+    tilted = lap([(0, 0), (5, 0.3), (4.6, 3.1), (0.4, 2.6)], kappa_max=2.0)
+    assert 1.6 < tilted["a"] < 2.0
+    assert lap([(0, 0), (3, 0), (3, 6), (0, 6)])["theta0"] == pytest.approx(math.pi / 2, abs=1e-3)
+    with pytest.raises(ValueError, match="too small"):
+        fit_bowtie(convex_hull([(0, 0), (2, 0), (2, 1.5), (0, 1.5)]), 0.2, 2.9)
 
 
 def test_the_survey_of_the_settings_file_identifies_everything():
@@ -109,6 +156,12 @@ def test_a_gerono_gives_no_pure_translation_pair():
     marker is in view, the orientation law stays off, and the camera's orientation is
     not identified."""
     settings = survey_settings()
-    settings["controller"] = {**settings["controller"], "shape": "gerono", "period": 60.0}
+    settings["controller"] = {**settings["controller"], "shape": "gerono", "period": 60.0,
+                              "x0": 2.0, "y0": 1.0, "theta0": 0.0}
+    settings["stands"] = [{"stand": "upright", "x": -2.75, "y": 0.95, "facing": -30},
+                          {"stand": "overhang", "x": 2.75, "y": 0.70, "facing": -150},
+                          {"stand": "diamond", "x": -2.50, "y": -1.80, "facing": 120},
+                          {"stand": "faceup", "x": 2.50, "y": -2.05, "facing": 120}]
+    settings["straight_tol"] = 5e-4         # the simulation's: the heading must repeat
     result = rehearsal.rehearse(settings, laps=2, dt=0.1, noise=None)
     assert result["ready"][0] is False

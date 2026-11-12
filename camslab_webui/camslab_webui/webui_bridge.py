@@ -16,7 +16,7 @@ from rclpy.signals import SignalHandlerOptions
 from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import SetBool, Trigger
 
-from .polytope import convex_hull, write_file
+from .polytope import convex_hull, fit_bowtie, write_file
 from .random_trajectory import random_params
 from .server import (Backend, UiServer, adaptive_config, fleet_msg, hello_msg, history_msgs,
                      samples_msg, status_msg)
@@ -77,6 +77,9 @@ class WebuiBridgeNode(Node, Backend):
         sample_rate = self.declare_parameter("sample_rate", 25.0).value
         self.polytope_file = self.declare_parameter("polytope_file", "").value
         self.adaptive = self.declare_parameter("adaptive", "").value or ""
+        # The survey: setting the safety polytope also sets the largest bowtie that fits
+        # in it as the path, and Start needs a polytope.
+        self.fit_bowtie = bool(self.declare_parameter("fit_bowtie", False).value)
         self.estimator = bool(self.adaptive)
         self.estimate_names = []
         self.plots = []
@@ -253,6 +256,9 @@ class WebuiBridgeNode(Node, Backend):
         elif kind == "set_polytope":
             self.set_polytope(msg["points"], float(msg["margin"]))
         elif kind == "start":
+            if self.fit_bowtie and not self.polytope["points"]:
+                self.report_error("set the safe area first: the path is fitted into it")
+                return
             self.reset_estimator()
             self.set_enabled(True)
         elif kind == "stop":
@@ -365,12 +371,22 @@ class WebuiBridgeNode(Node, Backend):
         if margin < 0:
             self.report_error("the safety polytope margin must be 0 or more")
             return
+        fitted = {}
+        if self.fit_bowtie and corners:
+            with self.lock:
+                kappa_max = float(self.params.get("kappa_max", 2.9))
+            try:
+                fitted = fit_bowtie(corners, margin, kappa_max)
+            except ValueError as exc:
+                self.report_error(str(exc))
+                return
         request = SetParametersAtomically.Request(parameters=[
             Parameter(name="polytope", value=ParameterValue(
                 type=ParameterType.PARAMETER_DOUBLE_ARRAY,
                 double_array_value=[c for corner in corners for c in corner])),
             Parameter(name="polytope_margin", value=ParameterValue(
-                type=ParameterType.PARAMETER_DOUBLE, double_value=margin))])
+                type=ParameterType.PARAMETER_DOUBLE, double_value=margin)),
+            *[parameter(name, value) for name, value in fitted.items()]])
         main, others = self.atomic_clients[0], self.atomic_clients[1:]
         if not main.service_is_ready():
             self.report_error(f"{main.srv_name} is not available")
@@ -388,6 +404,7 @@ class WebuiBridgeNode(Node, Backend):
                     self.report_error(f"{client.srv_name} is not available")
             with self.lock:
                 self.polytope = {"points": corners, "margin": margin}
+                self.params.update(fitted)
             self.server.broadcast_threadsafe(self.config_msg())
             if not self.polytope_file:
                 self.report_error("safety polytope applied but not saved: the bridge has "

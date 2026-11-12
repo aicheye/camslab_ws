@@ -18,7 +18,7 @@
     # spline: control points [x0, y0, x1, y1, ...] [m], at least 4 points, numbers with a
     # decimal point. The path goes around them and stays inside their outline.
     control_points: [1.0, 0.8, 2.5, 1.2, 4.0, 0.8, 4.4, 2.5, 2.5, 3.2, 0.6, 2.5]
-    t_max: 60.0        # ref_path and the limit check cover t in [0, t_max] [s]
+    t_max: 60.0        # ref_path and the checks cover t in [0, t_max] [s], or one lap when it is longer
 
     # Control law gains, all > 0.
     k_par: 1.0         # [1/s]

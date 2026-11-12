@@ -24,6 +24,7 @@ services:
       - ws_build:/ws/build
       - ws_install:/ws/install
       - ws_log:/ws/log
+      - ssh_keys:/root/.ssh      # the key `car setup` installs on a car
     working_dir: /ws
     command: bash
 
@@ -31,3 +32,4 @@ volumes:
   ws_build:
   ws_install:
   ws_log:
+  ssh_keys:

@@ -165,3 +165,62 @@ class PoseHistory:
             return None
         R0, R1 = self.at(t0)[:3, :3], self.at(t1)[:3, :3]
         return float(np.linalg.norm(log_rotation(R0.T @ R1))) / (t1 - t0)
+
+
+class Measurements:
+    """What the estimator receives on hardware: the robot pose at the time of each
+    camera image and the markers of that image. The node runs its estimator on a timer
+    that is faster than the camera, so next() answers every tick:
+
+    - a tick with a new image gets the pose at the image time minus `camera_delay` and
+      the image's markers, or the pose and no markers when the robot turned faster
+      than `max_yaw_rate` (PoseHistory.angular_speed);
+    - a tick without one gets the pose of the last image again and no markers. The
+      estimator measures its travel between the poses it is given, so they must all be
+      of image times: the newest pose is about 0.1 s ahead of the image's, and
+      alternating between the two counts every step back and forth;
+    - an image whose time has no pose (the car's clock is off, or the motion capture
+      stopped) is dropped, because a marker paired with a pose of another time is a
+      wrong measurement.
+
+    `used`, `turning` and `unpaired` count the images with markers that were given to
+    the estimator, skipped in a turn and dropped without a pose."""
+
+    def __init__(self, camera_delay: float = 0.0, max_yaw_rate: float = 0.0,
+                 horizon: float = 2.0):
+        self.camera_delay, self.max_yaw_rate = float(camera_delay), float(max_yaw_rate)
+        self.history = PoseHistory(horizon)
+        self.pending = None             # (image time, {j: C_T_Mj}) of the newest image
+        self.last = None                # the pose given with the last image
+        self.used = self.turning = self.unpaired = 0
+
+    def pose(self, t: float, T: np.ndarray) -> None:
+        """A robot pose W_T_R measured at time t."""
+        self.history.push(t, T)
+
+    def image(self, stamp: float, found: dict) -> None:
+        """A camera image taken at `stamp` with the markers {j: C_T_Mj}, empty when it
+        shows none. Only the newest image waits for the next tick."""
+        self.pending = (float(stamp), dict(found))
+
+    def next(self) -> tuple:
+        """(W_T_R, {j: C_T_Mj}) for the next estimator update; W_T_R is None before
+        the first pose."""
+        held = self.last if self.last is not None else self.history.latest()
+        if self.pending is None:
+            return held, {}
+        stamp, found = self.pending
+        self.pending = None
+        t = stamp - self.camera_delay
+        T_R = self.history.at(t)
+        if T_R is None:
+            self.unpaired += bool(found)
+            return held, {}
+        self.last = T_R
+        if found and self.max_yaw_rate > 0.0:
+            rate = self.history.angular_speed(t)
+            if rate is not None and rate > self.max_yaw_rate:
+                self.turning += 1
+                return T_R, {}
+        self.used += bool(found)
+        return T_R, found
