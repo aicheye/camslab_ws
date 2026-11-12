@@ -28,7 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 import camslab_settings
 
 
-def rviz_config(share, name, drive=False):
+def rviz_config(share, name, drive=False, teleop=False):
     """rviz/fleet.rviz plus the mocap pose, the fiducial markers and the TF tree, and
     with `drive` the controller's safe area, path and reference."""
     with open(os.path.join(share, "rviz", "fleet.rviz")) as f:
@@ -57,7 +57,7 @@ def rviz_config(share, name, drive=False):
     if drive:
         latched = {"Depth": 1, "Durability Policy": "Transient Local",
                    "History Policy": "Keep Last", "Reliability Policy": "Reliable"}
-        config["Visualization Manager"]["Displays"] += [
+        displays = [
             {"Class": "rviz_default_plugins/Polygon", "Name": "safety_polytope",
              "Enabled": True, "Topic": {"Value": f"/{name}/safety_polytope", **latched},
              "Color": "220; 40; 40", "Alpha": 1, "Value": True},
@@ -69,6 +69,8 @@ def rviz_config(share, name, drive=False):
              "Color": "235; 104; 52", "Shape": "Arrow", "Shaft Length": 0.25,
              "Shaft Radius": 0.02, "Head Length": 0.08, "Head Radius": 0.05, "Value": True},
         ]
+        # Driven by hand, there is no path to show: only the safe area.
+        config["Visualization Manager"]["Displays"] += displays[:1] if teleop else displays
     out = tempfile.NamedTemporaryFile("w", prefix="camslab_survey_", suffix=".rviz",
                                       delete=False)
     with out:
@@ -122,6 +124,7 @@ def survey(context):
                           "marker_height_noise": float(settings["marker_height_noise"])}]),
     ]
     drive = bool(settings.get("drive"))
+    teleop = str(settings.get("drive")).lower() == "teleop"
     bridge = {"backend_label": f"Fiducial survey, {name}", "port": int(settings["port"]),
               "robot_name": name, "adaptive": "fiducial"}
     if drive:
@@ -131,13 +134,16 @@ def survey(context):
         # fits it again whenever the area is set.
         controller = dict(settings.get("controller") or {})
         corners, margin = safe_area.read_file(polytope)
-        if corners:
+        if corners and teleop:
+            controller.update(safe_area.hold_point(corners))
+        elif corners:
             try:
-                controller.update(safe_area.fit_bowtie(corners, margin,
-                                                       float(controller.get("kappa_max", 2.9))))
+                controller.update(safe_area.fit_bowtie(
+                    corners, margin, float(controller.get("kappa_max", 2.9)),
+                    float(controller.get("corner_radius", 0.0))))
             except ValueError as exc:
                 print(f"survey: {exc}; set the safe area again in the web UI")
-        else:
+        elif not teleop:
             print("survey: no safe area yet; set it in the web UI, the bowtie is fitted into it")
         settings = {**settings, "controller": controller}
         files = [LaunchConfiguration("params").perform(context),
@@ -153,10 +159,11 @@ def survey(context):
         else:
             actions.append(Node(package="camslab", executable="car_drive", name="drive",
                                 output="screen", arguments=car.drive_arguments(settings)))
-        bridge.update({"start_enabled": False, "polytope_file": polytope, "fit_bowtie": True})
+        bridge.update({"start_enabled": False, "polytope_file": polytope, "fit_bowtie": True,
+                       "teleop": teleop})
     if settings["rviz"]:
         actions.append(Node(package="rviz2", executable="rviz2", output="log",
-                            arguments=["-d", rviz_config(share, name, drive)]))
+                            arguments=["-d", rviz_config(share, name, drive, teleop)]))
     if settings["webui"]:
         actions.append(Node(package="camslab_webui", executable="webui_bridge",
                             output="screen", parameters=[bridge]))

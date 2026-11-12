@@ -262,7 +262,8 @@ class Bowtie(Polyline):
     (-a, b), one lap every `period` seconds at constant speed. Both diagonals pass
     through (x0, y0), which is p*(0), heading theta0 + atan2(b, a). Each corner turns by
     pi/2 + atan2(b, a), right at the two corners at +a and left at the two at -a, along
-    an arc of radius 1 / kappa_max, so the car can follow the whole path. The arcs must
+    an arc of radius corner_radius, or 1 / kappa_max when that is 0, so the car can follow
+    the whole path. The arcs must
     fit on the short sides: b >= tan(pi/4 + atan2(b, a) / 2) / kappa_max.
 
     The straight edges and the turns in both directions are the excitation of the
@@ -272,7 +273,7 @@ class Bowtie(Polyline):
     def __init__(self, params: Params):
         a, b = params.a, params.b
         super().__init__(params, [(-a, -b), (a, b), (a, -b), (-a, b)], s0=math.hypot(a, b),
-                         radius=1.0 / params.kappa_max)
+                         radius=params.corner_radius or 1.0 / params.kappa_max)
         self.a, self.b = a, b
 
     @staticmethod

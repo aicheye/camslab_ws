@@ -33,6 +33,7 @@ equal. Settings come as command line arguments (camslab.car.node_arguments build
 """
 
 import argparse
+import os
 import math
 import sys
 import time
@@ -92,6 +93,9 @@ def parse_args(argv=None):
     p.add_argument("--draw", action="store_true", help="draw the detections on the preview")
     p.add_argument("--jpeg-quality", type=int, default=80)
     p.add_argument("--frames", type=int, default=0, help="stop after this many frames; 0: never")
+    p.add_argument("--record", default="", metavar="DIR",
+                   help="keep every frame on the car: DIR/<name>_<date>_<time>/frames.avi "
+                        "(Motion JPEG) and stamps.csv with the stamp of each frame")
     return p.parse_args(argv)
 
 
@@ -242,11 +246,25 @@ def open_camera(device, width, height, fps, pixel_format):
     """The camera as a cv2.VideoCapture with the requested format, or a RuntimeError
     that says what it gives instead."""
     import cv2
+    import glob
 
-    index = int(device) if str(device).isdigit() else str(device)
-    cap = cv2.VideoCapture(index, cv2.CAP_V4L2) if sys.platform.startswith("linux") else cv2.VideoCapture(index)
-    if not cap.isOpened():
-        raise RuntimeError(f"cannot open camera {device}")
+    # A USB camera that drops off the bus comes back under the next free number
+    # (/dev/video0 as /dev/video1), so when the named device is gone the other video
+    # devices are tried in order.
+    named = str(device)
+    others = [d for d in sorted(glob.glob("/dev/video*")) if d != named] if named.startswith("/dev/video") else []
+    cap = None
+    for candidate in [named, *others]:
+        index = int(candidate) if candidate.isdigit() else candidate
+        cap = cv2.VideoCapture(index, cv2.CAP_V4L2) if sys.platform.startswith("linux") else cv2.VideoCapture(index)
+        if cap.isOpened():
+            if candidate != named:
+                print(f"camera {named} is gone; using {candidate}", file=sys.stderr, flush=True)
+            device = candidate
+            break
+        cap.release()
+    else:
+        raise RuntimeError(f"cannot open camera {named}" + (f" or {', '.join(others)}" if others else ""))
     fourcc = FOURCC.get(str(pixel_format).lower(), str(pixel_format).upper())
     cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc))
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, int(width))
@@ -260,6 +278,68 @@ def open_camera(device, width, height, fps, pixel_format):
                            f"{height}; set image_width and image_height to a format of "
                            f"`v4l2-ctl --list-formats-ext -d {device}`")
     return cap
+
+
+class FrameRecorder:
+    """Writes the camera's frames to a Motion JPEG file and their stamps to a CSV, in a
+    thread of its own, so that a slow disk never delays the camera loop: a frame that
+    finds the queue full is dropped and counted. Any failure stops the recording and
+    leaves the camera node running."""
+
+    def __init__(self, directory, name, width, height, fps, log):
+        import queue
+        import threading
+
+        self.log = log
+        self.path = os.path.join(directory, f"{name}_{time.strftime('%Y%m%d_%H%M%S')}")
+        self.size, self.fps = (int(width), int(height)), float(fps)
+        self.queue = queue.Queue(maxsize=90)
+        self.written = self.dropped = 0
+        self.failed = False
+        self.thread = threading.Thread(target=self.work, daemon=True)
+        self.thread.start()
+
+    def add(self, image, stamp) -> None:
+        if self.failed:
+            return
+        try:
+            self.queue.put_nowait((image.copy(), stamp.sec, stamp.nanosec))
+        except Exception:               # queue.Full: the disk is behind
+            self.dropped += 1
+
+    def work(self) -> None:
+        import cv2
+
+        try:
+            os.makedirs(self.path, exist_ok=True)
+            writer = cv2.VideoWriter(os.path.join(self.path, "frames.avi"), cv2.CAP_OPENCV_MJPEG,
+                                     cv2.VideoWriter_fourcc(*"MJPG"), self.fps, self.size)
+            if not writer.isOpened():
+                raise RuntimeError("cv2.VideoWriter cannot write Motion JPEG here")
+            writer.set(cv2.VIDEOWRITER_PROP_QUALITY, 90)
+            with open(os.path.join(self.path, "stamps.csv"), "w") as stamps:
+                stamps.write("frame,sec,nanosec\n")
+                self.log.info(f"recording every frame to {self.path}")
+                while True:
+                    item = self.queue.get()
+                    if item is None:
+                        break
+                    image, sec, nanosec = item
+                    writer.write(image)
+                    stamps.write(f"{self.written},{sec},{nanosec}\n")
+                    self.written += 1
+                    if self.written % 150 == 0:
+                        stamps.flush()
+            writer.release()
+        except Exception as e:          # a full disk, a missing codec: keep the camera going
+            self.failed = True
+            self.log.error(f"the frame recording stopped: {e}")
+
+    def close(self) -> None:
+        if not self.failed:
+            self.queue.put(None)
+            self.thread.join(5.0)
+        self.log.info(f"recorded {self.written} frames to {self.path}, {self.dropped} dropped")
 
 
 def run(args):
@@ -311,6 +391,8 @@ def run(args):
                 else "no detection")
              + f", preview {args.preview_rate:g} Hz" + (" drawn" if args.draw else ""))
 
+    recorder = (FrameRecorder(args.record, args.name, args.width, args.height, args.fps, log)
+                if args.record else None)
     frames, markers, failures, detect_time, total = 0, 0, 0, 0.0, 0
     dropped = {SMALL: 0, AMBIGUOUS: 0}
     rate_time = last_preview = last_info = time.monotonic()
@@ -349,6 +431,8 @@ def run(args):
             ok, image = cap.retrieve()
             if not ok:
                 continue
+            if recorder is not None:
+                recorder.add(image, stamp)
             now = time.monotonic()
             frames += 1
             total += 1
@@ -409,6 +493,8 @@ def run(args):
         pass
     finally:
         cap.release()
+        if recorder is not None:
+            recorder.close()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

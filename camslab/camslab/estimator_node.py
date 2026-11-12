@@ -18,7 +18,7 @@ from geometry_msgs.msg import PoseStamped
 from rcl_interfaces.msg import ParameterEvent, ParameterType
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
-from std_msgs.msg import ColorRGBA, Float64MultiArray, MultiArrayDimension
+from std_msgs.msg import ColorRGBA, Float64MultiArray, MultiArrayDimension, String
 from std_srvs.srv import Trigger
 from aruco_msgs.msg import MarkerArray as ArucoMarkers
 from visualization_msgs.msg import Marker, MarkerArray
@@ -168,7 +168,22 @@ class EstimatorNode(Node):
         self.estimator = None
         self.true_path = None
         self.scene = None
+        self.images = {}             # marker index -> images given to the estimator
+        self.vicon = {}              # marker index -> position of the rigid body marker_<id>
+        self.last_status = -math.inf
         self.rebuild()
+        if self.sensor == "aruco":
+            # A text report for `car status` and `car teleop`: what each marker has
+            # contributed and whether the adaptive laws are on. A marker that is also a
+            # rigid body `marker_<id>` of the motion capture gives the distance of its
+            # estimated position to the measured one.
+            self.status_pub = self.create_publisher(String, "survey_status", 10)
+            for marker_id, j in self.marker_index.items():
+                self.create_subscription(
+                    PoseStamped, f"/vrpn_mocap/marker_{marker_id}/pose",
+                    lambda msg, j=j: self.vicon.__setitem__(j, np.array(
+                        [msg.pose.position.x, msg.pose.position.y, msg.pose.position.z])),
+                    qos_profile_sensor_data)
         self.create_timer(1.0 / rate, self.on_timer)
 
     def param(self, name, default):
@@ -182,6 +197,7 @@ class EstimatorNode(Node):
     def rebuild(self):
         """New estimator from the current parameters."""
         self.last_tick = None
+        self.images = {}
         if self.kind == "fiducial":
             self.rebuild_fiducial()
         elif self.kind == "path":
@@ -214,6 +230,7 @@ class EstimatorNode(Node):
                                         "need one value per marker")
                 return
             self.marker_index = {marker_id: j for j, marker_id in enumerate(ids)}
+            self.heights = heights
             self.n = len(ids)
             self.scene = None
             self.truth = None
@@ -338,6 +355,8 @@ class EstimatorNode(Node):
             T_R, observations = self.measurements.next()
             if T_R is None:
                 return
+            for j in observations:
+                self.images[j] = self.images.get(j, 0) + 1
         self.estimator.update(T_R, observations, dt)
         estimate = self.estimator.estimate()
         n = self.n
@@ -345,13 +364,93 @@ class EstimatorNode(Node):
         e = (fiducial.errors(estimate, truth, n) if self.truth is not None
              else np.full(4, np.nan))
         radii = self.estimator.radii()
+        names, extra, plots = fiducial.columns(n), [], fiducial.plots(self.estimator)
+        if self.scene is None:
+            truth, e, extra_names, extra, plots = self.hardware_columns(estimate, truth, e, plots)
+            names = names + extra_names
         self.estimate_pub.publish(array_msg(
-            fiducial.columns(n),
-            [*estimate, *truth, *e, *self.estimator.excitation(), *radii],
-            plots=fiducial.plots(self.estimator)))
+            names, [*estimate, *truth, *e, *self.estimator.excitation(), *radii, *extra],
+            plots=plots))
         if now - self.last_markers >= 1.0 / MARKER_RATE:
             self.last_markers = now
             self.marker_pub.publish(self.marker_array(T_R, estimate, e, radii))
+        if self.scene is None and now - self.last_status >= 1.0:
+            self.last_status = now
+            self.status_pub.publish(String(data=self.survey_status(estimate)))
+
+    def marker_truth(self, j):
+        """The position of marker j from the motion capture's rigid body marker_<id>, or
+        None without one. A body whose origin is not at the marker's centre (its height
+        is more than 30 mm from marker_height, as for an origin on the floor) gives the
+        horizontal position, with marker_height as the height."""
+        if j not in self.vicon:
+            return None
+        p = self.vicon[j].copy()
+        if abs(p[2] - self.heights[j]) > 0.03:
+            p[2] = self.heights[j]
+        return p
+
+    def hardware_columns(self, estimate, truth, e, plots):
+        """On hardware the truth is unknown except for the marker positions the motion
+        capture measures. Returns (truth, errors, extra column names, extra values,
+        plots): the truth and the error e_t filled where a marker is measured, per
+        marker its position error and the pairs it has formed, and the plots of a
+        survey: the fiducial error against the motion capture with its radius, the
+        camera estimate, the radii, the excitation against its gates and the pairs."""
+        n = self.n
+        truth = truth.copy()
+        names, values, errors = [], [], []
+        for marker_id, j in self.marker_index.items():
+            p = self.marker_truth(j)
+            error = math.nan
+            if p is not None:
+                truth[6 + 3 * n + 3 * j:9 + 3 * n + 3 * j] = p
+                if self.images.get(j, 0):
+                    error = float(np.linalg.norm(estimate[6 + 3 * n + 3 * j:9 + 3 * n + 3 * j] - p))
+            straight, turning = self.estimator.pair_counts.get(j, (0, 0))
+            names += [f"e_t_{marker_id}", f"straight_{marker_id}", f"turn_{marker_id}"]
+            values += [error, float(straight), float(turning)]
+            errors.append(error)
+        e = e.copy()
+        if any(math.isfinite(v) for v in errors):
+            e[3] = float(np.nanmax(errors))
+        ids = list(self.marker_index)
+        plots = list(plots) + [
+            {"caption": "Fiducial position error against the motion capture [m]",
+             "fields": [f"e_t_{i}" for i in ids] + ["r_t"], "log": True,
+             "dashed": {"r_t": f"e_t_{ids[0]}"}, "dashed_label": "99.73 % radius"},
+            {"caption": "Camera orientation estimate", "fields": ["x_1_hat", "x_2_hat", "x_3_hat"],
+             "log": False},
+            {"caption": "Camera position estimate [m]", "fields": ["tX_1_hat", "tX_2_hat", "tX_3_hat"],
+             "log": False},
+            {"caption": "99.73 % covariance radii", "fields": list(fiducial.RADIUS_FIELDS), "log": True},
+            {"caption": "Excitation", "fields": ["lam_x", "lam_t"], "log": True,
+             "refs": [{"value": self.estimator.alpha_x, "label": "gate", "field": "lam_x"}]},
+            {"caption": "Pairs formed per marker",
+             "fields": [f"{kind}_{i}" for i in ids for kind in ("straight", "turn")], "log": False},
+        ]
+        return truth, e, tuple(names), values, plots
+
+    def survey_status(self, estimate) -> str:
+        """The report as JSON: per marker the images used, the pure-translation and
+        rotation pairs formed and the distance [m] to the motion capture's marker_<id>
+        (null without one), and for the two laws the excitation, its gate and whether
+        the law is on."""
+        n, markers = self.n, []
+        for marker_id, j in self.marker_index.items():
+            straight, turning = self.estimator.pair_counts.get(j, (0, 0))
+            distance, truth = None, self.marker_truth(j)
+            if truth is not None and self.images.get(j, 0):
+                t_hat = estimate[6 + 3 * n + 3 * j:9 + 3 * n + 3 * j]
+                distance = float(np.linalg.norm(t_hat - truth))
+            markers.append({"id": int(marker_id), "images": int(self.images.get(j, 0)),
+                            "straight": int(straight), "turn": int(turning), "vicon": distance})
+        lam_x, lam_t = (float(v) for v in self.estimator.excitation()[:2])
+        ready_x, ready_t = self.estimator.ready()
+        return json.dumps({
+            "markers": markers,
+            "orientation": {"excitation": lam_x, "gate": self.estimator.alpha_x, "on": bool(ready_x)},
+            "position": {"excitation": lam_t, "gate": self.estimator.alpha_t, "on": bool(ready_t)}})
 
     def marker_array(self, T_R, estimate, e, radii):
         """RViz markers: the true fiducials and camera in grey (simulated sensor only),

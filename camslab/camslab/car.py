@@ -12,6 +12,7 @@ client, the estimator, RViz and the web UI run here (docs/hardware-survey.md).
     ros2 run camslab car install --fetch-only ...     download it to ~/.cache/camslab/debs while online
     ros2 run camslab car camera                       the camera node on the car, rates here
     ros2 run camslab car drive                        the command relay on the car, for the timeout test
+    ros2 run camslab car teleop                       drive by keyboard and watch the survey's data
     ros2 run camslab car calibrate --name <model>_<w>x<h>
     ros2 run camslab car status [--show]              topic rates; --show: the preview
 
@@ -50,6 +51,7 @@ NODE_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "car_node.
 REMOTE_NODE = "/tmp/camslab_car_node.py"        # where the car keeps its copy
 DRIVE_FILE = os.path.join(os.path.dirname(os.path.realpath(__file__)), "car_drive.py")
 REMOTE_DRIVE = "/tmp/camslab_car_drive.py"
+REMOTE_VIDEO = "/root/camslab_video"            # where the car keeps recorded camera frames
 CLOCK_OFFSET = 0.02                             # tolerated car clock offset [s]
 CHRONY_MARK = "# camslab: serve time to the lab cars (ros2 run camslab car chrony)"
 ROS_APT = "http://packages.ros.org/ros2/ubuntu"     # where the cars' ROS packages come from
@@ -85,6 +87,9 @@ DEFAULTS = {
     "framerate": 30.0, "pixel_format": "yuyv",
     "nominal_fov": 0.0,             # horizontal field of view [deg] used while `camera` is empty
     "preview_rate": 2.0,            # JPEG frames per second streamed from the car
+    # true: the car keeps every camera frame (Motion JPEG, about 0.5 GB in five minutes)
+    # under REMOTE_VIDEO; `ros2 run camslab car video` copies the recordings here.
+    "record_video": False,
     # The printed markers of hardware/marker_mounts/markers.pdf.
     "dictionary": "DICT_4X4_50", "marker_size": 0.14,
     # Which detections become observations: the shortest side in the image [px] and the
@@ -188,6 +193,8 @@ def node_arguments(settings: dict, calibration_file: str = "", detect: bool = Tr
     if preview_rate is None:
         preview_rate = float(settings.get("preview_rate", 2.0))
     args += ["--preview-rate", f"{preview_rate:g}", "--jpeg-quality", str(int(jpeg_quality))]
+    if settings.get("record_video") and detect:
+        args += ["--record", REMOTE_VIDEO]
     if not detect:
         args.append("--no-detect")
     if draw:
@@ -331,7 +338,7 @@ class Watch:
         from rclpy.qos import qos_profile_sensor_data
         from geometry_msgs.msg import PoseStamped
         from sensor_msgs.msg import CameraInfo, CompressedImage
-        from std_msgs.msg import Float64MultiArray
+        from std_msgs.msg import Float64MultiArray, String
         from aruco_msgs.msg import MarkerArray as ArucoMarkers
 
         rclpy.init()
@@ -345,6 +352,7 @@ class Watch:
         self.info = None
         self.markers = {}                   # id -> distance [m] of the last observations
         self.pose = None
+        self.pose_time = None
         self.estimate = None
         qos = qos_profile_sensor_data
         if images:
@@ -355,6 +363,8 @@ class Watch:
         self.node.create_subscription(ArucoMarkers, f"{ns}/observations", self.on_observations, 10)
         self.node.create_subscription(PoseStamped, f"{ns}/pose", self.on_pose, qos)
         self.node.create_subscription(Float64MultiArray, f"{ns}/estimate", self.on_estimate, 10)
+        self.survey = None                  # the estimator's report (estimator_node.survey_status)
+        self.node.create_subscription(String, f"{ns}/survey_status", self.on_survey, 10)
 
     def on_compressed(self, msg):
         self.rates["preview"].tick(msg.format)
@@ -373,10 +383,19 @@ class Watch:
     def on_pose(self, msg):
         self.rates["pose"].tick()
         self.pose = msg.pose
+        self.pose_time = time.monotonic()
 
     def on_estimate(self, msg):
         self.rates["estimate"].tick()
         self.estimate = list(msg.data)
+
+    def on_survey(self, msg):
+        import json
+
+        try:
+            self.survey = json.loads(msg.data)
+        except ValueError:
+            self.survey = None
 
     def spin(self, seconds: float) -> None:
         self.rclpy.spin_once(self.node, timeout_sec=seconds)
@@ -412,12 +431,137 @@ class Watch:
         return [self.image_line(),
                 f"markers    seen: {seen}",
                 f"mocap      pose {self.rates['pose'].text()}           {pose}",
-                f"estimator  estimate {self.rates['estimate'].text()}       {estimate}"]
+                f"estimator  estimate {self.rates['estimate'].text()}       {estimate}",
+                *survey_lines(self.survey)]
 
     def close(self) -> None:
         self.node.destroy_node()
         if self.rclpy.ok():
             self.rclpy.shutdown()
+
+
+# How many pairs of a marker fill its bars: about what four laps of the rehearsed bowtie
+# form per marker with two stands (docs/hardware-survey.md).
+STRAIGHT_TARGET = 40
+TURN_TARGET = 10
+
+
+def bar(value: float, target: float, width: int = 20) -> str:
+    """A bar of `width` cells, full at `target`."""
+    filled = int(round(width * min(max(value / target, 0.0), 1.0))) if target > 0 else 0
+    return "\u2588" * filled + "\u2591" * (width - filled)
+
+
+def survey_lines(survey) -> list:
+    """The estimator's report as lines: per marker a bar of its pure-translation pairs
+    and one of its rotation pairs, then a bar per adaptive law, full when the law's
+    excitation reaches its gate and the law switches on."""
+    if not survey:
+        return []
+    lines = []
+    for marker in survey.get("markers", []):
+        vicon = "" if marker.get("vicon") is None else f"   {1e3 * marker['vicon']:.0f} mm from Vicon"
+        lines.append(
+            f"marker {marker['id']:<3d} straight {bar(marker['straight'], STRAIGHT_TARGET)} "
+            f"{marker['straight']:3d}/{STRAIGHT_TARGET}   turn {bar(marker['turn'], TURN_TARGET)} "
+            f"{marker['turn']:3d}/{TURN_TARGET}   {marker['images']} images{vicon}")
+    for name, key in (("camera orientation", "orientation"), ("camera position   ", "position")):
+        law = survey.get(key)
+        if law:
+            lines.append(f"{name} {bar(law['excitation'], law['gate'])} "
+                         f"{'law on' if law['on'] else 'law OFF'} ({law['excitation']:.3f} of {law['gate']:g})")
+    return lines
+
+
+def recording_topics(settings: dict) -> list:
+    """What a survey run records: everything the batch check and a replay of the
+    estimator need, the estimator's own output, the commands, the motion capture's
+    marker_<id> bodies as the truth, the preview images and the car driver's speed and
+    inertial measurements."""
+    name = str(settings["name"])
+    topics = [f"/{name}/{t}" for t in ("pose", "observations", "estimate", "survey_status", "cmd_vel",
+                                       "camera_info", "preview/compressed", "ref_pose")]
+    topics += [f"/vrpn_mocap/marker_{int(i)}/pose" for i in settings.get("marker_ids") or []]
+    driver = os.path.dirname(str(settings.get("driver_cmd_vel") or "/cmd_vel")).rstrip("/")
+    topics += [f"{driver}/vel_raw", f"{driver}/imu/data_raw"]
+    return topics
+
+
+def recording_directory(settings: dict) -> str:
+    """surveys/<name>_<date>_<time> in the repository, or in the current directory when
+    this file is installed elsewhere."""
+    root = os.path.normpath(os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", ".."))
+    if not os.path.isdir(os.path.join(root, "camslab_standalone")):
+        root = os.getcwd()
+    return os.path.join(root, "surveys", f"{settings['name']}_{time.strftime('%Y%m%d_%H%M%S')}")
+
+
+def interrupt_with_parent() -> None:
+    """In a child process, before it starts: ask the kernel to send it SIGINT when its
+    parent dies (Linux prctl PR_SET_PDEATHSIG)."""
+    import ctypes
+    import signal
+
+    try:
+        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, int(signal.SIGINT))
+    except OSError:
+        pass
+
+
+def stray_recorders() -> list:
+    """The pids of `ros2 bag record` processes that write under surveys/, left by an
+    earlier run."""
+    out = subprocess.run(["ps", "-eo", "pid,args"], capture_output=True, text=True).stdout
+    return [int(line.split()[0]) for line in out.splitlines()
+            if "ros2 bag record" in line and "surveys/" in line]
+
+
+class Recording:
+    """`ros2 bag record` of recording_topics() in the background. stop() ends it and puts
+    the settings and the commit of this repository next to the recording."""
+
+    def __init__(self, settings: dict, settings_file: str):
+        self.directory = recording_directory(settings)
+        self.settings_file = settings_file
+        os.makedirs(os.path.dirname(self.directory), exist_ok=True)
+        self.log = open(self.directory + ".log", "w")
+        self.started = time.monotonic()
+        # The recorder must never outlive this program: a recorder left behind keeps
+        # subscribing to every topic over the WiFi. It stays in this program's process
+        # group, so Ctrl-C and a closed terminal reach it, and the kernel interrupts it
+        # when this program dies in any other way.
+        self.process = subprocess.Popen(
+            ["ros2", "bag", "record", "-o", self.directory, *recording_topics(settings)],
+            stdin=subprocess.DEVNULL, stdout=self.log, stderr=subprocess.STDOUT,
+            preexec_fn=interrupt_with_parent)
+
+    def line(self) -> str:
+        where = os.path.relpath(self.directory)
+        if self.process.poll() is not None:
+            return f"recording  STOPPED ({self.process.returncode}): see {where}.log"
+        size = sum(os.path.getsize(os.path.join(self.directory, f))
+                   for f in (os.listdir(self.directory) if os.path.isdir(self.directory) else []))
+        return f"recording  {where}   {time.monotonic() - self.started:4.0f} s   {size / 1e6:.1f} MB"
+
+    def stop(self) -> None:
+        import shutil
+        import signal
+
+        if self.process.poll() is None:
+            self.process.send_signal(signal.SIGINT)
+            try:
+                self.process.wait(10)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(5)
+        self.log.close()
+        if os.path.isdir(self.directory):
+            shutil.copyfile(self.settings_file, os.path.join(self.directory, "survey.yaml"))
+            repository = os.path.dirname(os.path.dirname(self.directory))
+            commit = subprocess.run(["git", "-C", repository, "describe", "--always", "--dirty"],
+                                    capture_output=True, text=True).stdout.strip()
+            with open(os.path.join(self.directory, "commit.txt"), "w") as f:
+                f.write(commit + "\n")
 
 
 def header(settings: dict) -> str:
@@ -740,48 +884,51 @@ def cmd_setup(settings: dict, args) -> int:
     return 0 if ok else 1
 
 
-def set_clock(host: str, lead: float) -> int:
-    """`sudo date` on the car to this computer's time plus `lead`, the delay between
-    reading the time here and the command running there. An epoch stamp with
-    milliseconds, so the car's locale cannot misparse it; -t lets sudo prompt."""
-    return subprocess.run([*SSH, "-t", host, f"sudo date -u -s @{time.time() + lead:.3f}"],
-                          stdout=subprocess.DEVNULL).returncode
+def step_clock(host: str, offset: float) -> int:
+    """Moves the car's clock back by `offset` seconds, the offset clock_offset() measured.
+    The step is relative and is taken on the car, so the time the ssh connection and
+    sudo need, which varies by hundreds of milliseconds, does not enter. -t lets sudo
+    prompt for the car's password."""
+    step = (f"import time; time.clock_settime(time.CLOCK_REALTIME, "
+            f"time.clock_gettime(time.CLOCK_REALTIME) - ({offset!r}))")
+    return subprocess.run([*SSH, "-t", host, f"sudo python3 -c {shlex.quote(step)}"],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
 
 
 def cmd_clock(settings: dict, args) -> int:
     """Sets the car's clock to this computer's over ssh (sudo may ask for the car's
-    password). The first pass lands behind by the ssh connection time; the next passes
-    add the offset just measured, until it is within CLOCK_OFFSET."""
+    password): the offset is measured over one open ssh session, to within the round
+    trip of a few milliseconds, and the car steps its own clock by it."""
     host = str(settings.get("camera_host") or "")
     if not host:
         print("set camera_host in config/survey.yaml")
         return 1
     if not check_ssh(settings):
         return 1
-    before = clock_offset(settings)
-    if before is not None:
-        print(f"car clock offset before: {before[0]:+.3f} s", flush=True)
-    lead, after = 0.0, None
-    for _ in range(4):
-        code = set_clock(host, lead)
+    offset = clock_offset(settings)
+    if offset is None:
+        print("the car did not answer the clock check")
+        return 1
+    print(f"car clock offset before: {offset[0]:+.3f} s", flush=True)
+    for _ in range(3):
+        if abs(offset[0]) <= CLOCK_OFFSET / 4.0:
+            break
+        code = step_clock(host, offset[0])
         if code != 0:
-            print(f"setting the date on {host} failed ({code})")
+            print(f"stepping the clock on {host} failed ({code})")
             return 1
-        after = clock_offset(settings)
-        if after is None:
+        offset = clock_offset(settings)
+        if offset is None:
             print("the car did not answer the clock check")
             return 1
-        print(f"car clock offset now: {1e3 * after[0]:+.0f} ms (round trip {1e3 * after[1]:.0f} ms)",
+        print(f"car clock offset now: {1e3 * offset[0]:+.1f} ms (round trip {1e3 * offset[1]:.0f} ms)",
               flush=True)
-        if abs(after[0]) <= CLOCK_OFFSET:
-            break
-        lead -= after[0]
-    ok = abs(after[0]) <= CLOCK_OFFSET
+    ok = abs(offset[0]) <= CLOCK_OFFSET
     if not ok:
-        print(f"still above {1e3 * CLOCK_OFFSET:.0f} ms; the ssh connection time varies too much, "
-              "run it again")
-    print("The Jetson loses the time at every boot without a battery-backed clock: run this "
-          "after each power-up, or install chrony on the car against this computer.")
+        print(f"still above {1e3 * CLOCK_OFFSET:.0f} ms; run it again")
+    print("The Jetson loses the time at every boot without a battery-backed clock and drifts "
+          "about 20 ms in ten minutes: run this after each power-up and before each run, or "
+          "install chrony on the car against this computer.")
     return 0 if ok else 1
 
 
@@ -1255,6 +1402,215 @@ def cmd_status(settings: dict, args) -> int:
     return 0
 
 
+def cmd_video(settings: dict, args) -> int:
+    """Copies the camera frames the car recorded (record_video) to surveys/video here.
+    Nothing is deleted on the car; the command that would is printed."""
+    host = str(settings.get("camera_host") or "")
+    if not host or not check_ssh(settings):
+        return 1
+    code, out, err = ssh_run(host, remote_shell(
+        settings, f"du -sh {REMOTE_VIDEO}/* 2>/dev/null; df -h {REMOTE_VIDEO} 2>/dev/null | tail -1"))
+    if code != 0 or not out.strip():
+        print(f"no recordings in {REMOTE_VIDEO} on the car ({err or 'empty'}); start the launch "
+              "with record_video:=true")
+        return 1
+    print(out.strip())
+    target = os.path.join(os.path.dirname(recording_directory(settings)), "video")
+    os.makedirs(target, exist_ok=True)
+    send = subprocess.Popen([*SSH, "-o", "BatchMode=yes", host,
+                             remote_shell(settings, f"tar -C {REMOTE_VIDEO} -cf - .")],
+                            stdout=subprocess.PIPE)
+    code = subprocess.run(["tar", "-xf", "-", "-C", target], stdin=send.stdout).returncode
+    send.wait()
+    if code != 0 or send.returncode != 0:
+        print(f"the copy failed (tar {code}, ssh {send.returncode})")
+        return 1
+    print(f"copied to {target}\nto free the car's disk: ssh {host} "
+          f"\"docker exec {settings.get('container') or ''} rm -r {REMOTE_VIDEO}\"")
+    return 0
+
+
+TELEOP_KEYS = {  # key: (direction of travel, steering): +1 forward or left, -1 backward or right
+    "w": (1, 0), "q": (1, 1), "e": (1, -1), "s": (-1, 0), "z": (-1, 1), "c": (-1, -1),
+    "i": (1, 0), "u": (1, 1), "o": (1, -1), ",": (-1, 0), "m": (-1, 1), ".": (-1, -1)}
+# A driving key keeps the car driving until another key, for at most this long [s]. The
+# first version drove only while a key was held, through the keyboard's repeat: the
+# repeat starts after 0.5 s and arrives unevenly, so the car stuttered at the start and
+# ran on for 0.6 s after the release.
+TELEOP_LATCH = 20.0
+
+
+class SafeArea:
+    """The safety polytope the web UI saved (config/polytope.yaml), for driving by hand.
+    passes() says whether a command may go to the car: any command inside the area, and
+    outside it only one that drives back the way the car came, the opposite direction
+    of travel to the one it left with. Without a recent pose nothing passes. The file is
+    read again when it changes, so an area set in the web UI applies at once."""
+
+    def __init__(self, path: str):
+        self.path, self.mtime, self.area = path, None, None
+        self.left_with = 0          # direction of travel with which the car left the area
+
+    def load(self) -> None:
+        from camslab_webui.polytope import read_file
+        from .safety import Polytope
+
+        mtime = os.path.getmtime(self.path) if os.path.isfile(self.path) else None
+        if mtime == self.mtime:
+            return
+        self.mtime = mtime
+        corners, _ = read_file(self.path)
+        try:
+            self.area = Polytope([c for corner in corners for c in corner]) if corners else None
+        except ValueError:
+            self.area = None
+
+    def passes(self, v: float, pose, pose_age) -> tuple:
+        """(whether a command with speed v passes, the line for the screen)."""
+        self.load()
+        if self.area is None:
+            return True, "safe area  none set: set it in the web UI"
+        if pose is None or pose_age is None or pose_age > 0.5:
+            return False, "safe area  NO POSE from the motion capture: the car is held"
+        distance = self.area.signed_distance((pose.position.x, pose.position.y))
+        if distance >= 0.0:
+            if v != 0.0:
+                self.left_with = 1 if v > 0 else -1
+            return True, f"safe area  inside, {distance:.2f} m to the edge"
+        back = "backward" if self.left_with >= 0 else "forward"
+        allowed = v == 0.0 or (v > 0) != (self.left_with >= 0)
+        return allowed, (f"safe area  OUTSIDE by {-distance:.2f} m: only {back} passes, "
+                         "drive back in")
+
+
+def teleop_command(key: str, speed: float, curvature: float):
+    """(v [m/s], w [rad/s]) of a driving key, or None for another key. The wheels are
+    steered to the curvature `curvature`, so the turning rate is curvature * v and
+    changes sign when the car reverses."""
+    if key not in TELEOP_KEYS:
+        return None
+    direction, steering = TELEOP_KEYS[key]
+    v = direction * speed
+    return v, steering * curvature * v
+
+
+def cmd_teleop(settings: dict, args) -> int:
+    """Drives the car from the keyboard through the command relay that
+    survey.launch.py runs on the car, records the run (Recording) and shows the
+    estimator's report, to collect the survey's data by hand. A driving key keeps the
+    car driving until space or any other key, or for TELEOP_LATCH seconds; when this
+    program or the network stops, the commands stop and the relay stops the car.
+    Outside the safe area of the web UI only a command that drives back in passes
+    (SafeArea)."""
+    import termios
+    import tty
+    from geometry_msgs.msg import Twist
+    from std_srvs.srv import Trigger
+
+    if not sys.stdin.isatty():
+        print("teleop reads the keyboard: run it in a terminal")
+        return 1
+    controller = settings.get("controller") or {}
+    v_max = float(controller.get("v_max", 0.4))
+    kappa_max = float(controller.get("kappa_max", 2.9))
+    max_yaw_rate = float(settings.get("max_yaw_rate", 0.0))
+    speed, curvature = min(0.15, v_max), min(1.5, kappa_max)
+    watch = Watch(settings, images=False)
+    publisher = watch.node.create_publisher(Twist, f"/{watch.name}/cmd_vel", 10)
+    reset = watch.node.create_client(Trigger, f"/{watch.name}/estimator/reset")
+    screen = Screen()
+    stray = stray_recorders()
+    if stray:
+        print(f"{len(stray)} recorders of earlier runs are still running and load the network: "
+              f"stop them with `kill -INT {' '.join(map(str, stray))}` and start again")
+        return 1
+    recording = None if args.no_record else Recording(settings, args.config)
+    area = SafeArea(os.path.join(os.path.dirname(os.path.abspath(args.config)), "polytope.yaml"))
+    area_line = ""
+    drive_key, until, last_publish, last_draw, note = "", 0.0, 0.0, 0.0, ""
+    saved = termios.tcgetattr(sys.stdin)
+
+    def publish(v, w):
+        msg = Twist()
+        msg.linear.x, msg.angular.z = float(v), float(w)
+        publisher.publish(msg)
+
+    try:
+        tty.setcbreak(sys.stdin.fileno())
+        while True:
+            watch.spin(0.02)
+            now = time.monotonic()
+            while select.select([sys.stdin], [], [], 0)[0]:
+                key = sys.stdin.read(1)
+                if key.lower() in TELEOP_KEYS:
+                    drive_key, until = key.lower(), now + TELEOP_LATCH
+                elif key in "+=":
+                    speed = min(speed + 0.02, v_max)
+                elif key in "-_":
+                    speed = max(speed - 0.02, 0.04)
+                elif key == "]":
+                    curvature = min(curvature + 0.25, kappa_max)
+                elif key == "[":
+                    curvature = max(curvature - 0.25, 0.25)
+                elif key == "r":
+                    if reset.service_is_ready():
+                        reset.call_async(Trigger.Request())
+                        note = "estimator reset"
+                    else:
+                        note = "the estimator is not running"
+                elif key in ("x", "\x03"):
+                    raise KeyboardInterrupt
+                else:                   # space and every other key stop the car
+                    drive_key, until = "", now
+            driving = bool(drive_key) and now <= until
+            command = teleop_command(drive_key, speed, curvature) if driving else (0.0, 0.0)
+            if now - last_publish >= 0.05:
+                last_publish = now
+                passes, area_line = area.passes(
+                    command[0], watch.pose, None if watch.pose_time is None else now - watch.pose_time)
+                if driving:
+                    publish(*(command if passes else (0.0, 0.0)))
+                elif now <= until + 1.0:
+                    publish(0.0, 0.0)
+            if now - last_draw > 0.25:
+                last_draw = now
+                v, w = command
+                left = f"   stops by itself in {until - now:2.0f} s" if driving else ""
+                turn = curvature * speed
+                fast = (f"   images are skipped above {max_yaw_rate:g} rad/s: lower the speed or the "
+                        "curvature" if 0.0 < max_yaw_rate < turn else "")
+                screen.draw([
+                    header(settings),
+                    "press once to drive:   q w e   forward-left, forward, forward-right",
+                    "                       z s c   backward-left, backward, backward-right",
+                    "SPACE or any other key stops   + - speed   [ ] curvature   r reset the estimator   x quit",
+                    f"speed {speed:.2f} m/s, curvature {curvature:.2f} 1/m (turning {turn:.2f} rad/s){fast}",
+                    f"command    v {v:+.2f} m/s  w {w:+.2f} rad/s{left}   {note}",
+                    area_line,
+                    recording.line() if recording else "recording  off (--no-record)",
+                    *watch.lines()])
+    except KeyboardInterrupt:
+        pass
+    finally:
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, saved)
+        try:
+            for _ in range(5):
+                publish(0.0, 0.0)
+                time.sleep(0.02)
+        except Exception:               # Ctrl-C has already shut ROS down: the relay stops the car
+            pass
+        screen.end()
+        try:
+            watch.close()
+        except Exception:
+            pass
+        if recording:
+            recording.stop()
+            print(f"recorded {recording.directory}\nfit it with: cd camslab_standalone && uv run python "
+                  f"-m camslab_standalone.fiducial.recorded {recording.directory}")
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="car", description=__doc__.split("\n\n")[0],
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1274,6 +1630,10 @@ def main(argv=None) -> int:
                         help="use systemd-timesyncd on the car even if chrony could be installed")
     sub.add_parser("camera", help="run the camera node on the car and show the rates here")
     sub.add_parser("drive", help="run the command relay on the car")
+    teleop = sub.add_parser("teleop", help="drive the car from the keyboard, record the run and "
+                                           "watch the survey's data")
+    teleop.add_argument("--no-record", action="store_true", help="do not record the run")
+    sub.add_parser("video", help="copy the camera frames the car recorded to this computer")
     cal = sub.add_parser("calibrate", help="calibrate the camera from its image topic")
     cal.add_argument("--name", required=True,
                      help="calibration name, <camera model>_<width>x<height>")
@@ -1307,7 +1667,8 @@ def main(argv=None) -> int:
         args.packages = [p for p in args.packages if "=" not in p]
     settings = load_settings(args.config, args.overrides)
     return {"find": cmd_find, "setup": cmd_setup, "clock": cmd_clock, "chrony": cmd_chrony,
-            "install": cmd_install, "camera": cmd_camera, "drive": cmd_drive,
+            "install": cmd_install, "camera": cmd_camera, "drive": cmd_drive, "teleop": cmd_teleop,
+            "video": cmd_video,
             "calibrate": cmd_calibrate, "status": cmd_status}[args.command](settings, args)
 
 

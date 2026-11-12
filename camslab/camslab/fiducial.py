@@ -592,6 +592,9 @@ class Estimator:
         self.H_t = History(n_t)
         self.H_h = History(n_h)
         self.buffers = {}
+        # {marker: [pure-translation pairs, rotation pairs]} formed so far, for a report
+        # of how much each marker has contributed.
+        self.pair_counts = {}
         self.travel = 0.0
         self.last_p = None
         self.X = np.zeros(6 + 6 * n_markers)
@@ -637,7 +640,9 @@ class Estimator:
                 Sig_d, Sig_u = translation_pair_covariances(B[:3, :3], T_M[:3, 3], u, d,
                                                             self.noise)
                 self.H_x.push((Phi, y, Sig_d, Sig_u), *information(Phi[None], y[None]))
+                self.pair_counts.setdefault(j, [0, 0])[0] += 1
             if rotation is not None:
+                self.pair_counts.setdefault(j, [0, 0])[1] += 1
                 _, _, T_Mi, A = rotation
                 B = T_Mi @ inverse(T_M)
                 p, q = rotation_cayley(A[:3, :3]), rotation_cayley(B[:3, :3])

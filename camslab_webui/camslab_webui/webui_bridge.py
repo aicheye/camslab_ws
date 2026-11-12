@@ -16,14 +16,14 @@ from rclpy.signals import SignalHandlerOptions
 from std_msgs.msg import Float64MultiArray
 from std_srvs.srv import SetBool, Trigger
 
-from .polytope import convex_hull, fit_bowtie, write_file
+from .polytope import convex_hull, fit_bowtie, hold_point, write_file
 from .random_trajectory import random_params
 from .server import (Backend, UiServer, adaptive_config, fleet_msg, hello_msg, history_msgs,
                      samples_msg, status_msg)
 
 PARAM_NAMES = ["shape", "x0", "y0", "theta0", "circle_speed", "kappa", "a", "b", "period",
                "phi0", "control_points", "k_par", "k_perp", "k_q", "kappa_max", "w_max",
-               "v_max", "t_max"]
+               "v_max", "t_max", "corner_radius"]
 POLYTOPE_NAMES = ["polytope", "polytope_margin"]
 MAX_SAMPLES = 20000
 SAMPLE_SLACK = 0.005
@@ -80,6 +80,9 @@ class WebuiBridgeNode(Node, Backend):
         # The survey: setting the safety polytope also sets the largest bowtie that fits
         # in it as the path, and Start needs a polytope.
         self.fit_bowtie = bool(self.declare_parameter("fit_bowtie", False).value)
+        # The car is driven by hand (`car teleop`): no path is drawn, and Start resets
+        # the estimator and the plots without enabling the path controller.
+        self.teleop = bool(self.declare_parameter("teleop", False).value)
         self.estimator = bool(self.adaptive)
         self.estimate_names = []
         self.plots = []
@@ -139,6 +142,8 @@ class WebuiBridgeNode(Node, Backend):
         return self.get_clock().now().nanoseconds * 1e-9
 
     def on_path(self, msg):
+        if self.teleop:
+            return
         with self.lock:
             self.path = [[p.pose.position.x, p.pose.position.y] for p in msg.poses]
         self.server.broadcast_threadsafe(self.config_msg())
@@ -255,6 +260,14 @@ class WebuiBridgeNode(Node, Backend):
             self.randomize()
         elif kind == "set_polytope":
             self.set_polytope(msg["points"], float(msg["margin"]))
+        elif kind == "start" and self.teleop:
+            self.reset_estimator()
+            with self.lock:
+                for robot in self.robots.values():
+                    robot.rows = []
+                self.t0 = None
+            await self.server.broadcast(samples_msg([], reset=True))
+            self.report_warning_text("estimator and plots reset; drive with `ros2 run camslab car teleop`")
         elif kind == "start":
             if self.fit_bowtie and not self.polytope["points"]:
                 self.report_error("set the safe area first: the path is fitted into it")
@@ -372,11 +385,14 @@ class WebuiBridgeNode(Node, Backend):
             self.report_error("the safety polytope margin must be 0 or more")
             return
         fitted = {}
-        if self.fit_bowtie and corners:
+        if self.teleop and corners:
+            fitted = hold_point(corners)
+        elif self.fit_bowtie and corners:
             with self.lock:
                 kappa_max = float(self.params.get("kappa_max", 2.9))
+                radius = float(self.params.get("corner_radius", 0.0))
             try:
-                fitted = fit_bowtie(corners, margin, kappa_max)
+                fitted = fit_bowtie(corners, margin, kappa_max, radius)
             except ValueError as exc:
                 self.report_error(str(exc))
                 return
@@ -423,6 +439,11 @@ class WebuiBridgeNode(Node, Backend):
             state = self.status["state"]
         self.server.broadcast_threadsafe(
             status_msg(state, f"the car cannot track the whole trajectory: {message}"))
+
+    def report_warning_text(self, message):
+        """Shows message in the UI header as it is."""
+        self.get_logger().info(message)
+        self.server.broadcast_threadsafe(status_msg("idle", message))
 
     def report_error(self, message):
         self.get_logger().error(message)

@@ -36,6 +36,7 @@ class Params:
     period: float = 40.0
     phi0: float = 0.0
     control_points: tuple = (1.0, 0.8, 2.5, 1.2, 4.0, 0.8, 4.4, 2.5, 2.5, 3.2, 0.6, 2.5)
+    corner_radius: float = 0.0      # bowtie corner arcs [m]; 0: 1 / kappa_max, the tightest
 
     k_par: float = 1.0
     k_perp: float = 4.0

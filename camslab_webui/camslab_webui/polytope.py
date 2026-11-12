@@ -61,14 +61,28 @@ def signed_distance(corners, p):
     return d
 
 
-def fit_bowtie(corners, margin, kappa_max, a_max=2.0, aspect=0.5, speed=0.14, slack=0.05):
+def hold_point(corners):
+    """Controller parameters of a path that stays at the centroid of the safety polytope
+    (it moves 1 mm/s), for a car that is driven by hand: the controller accepts a safety
+    polytope only around its path, and this one is inside every area with a centre."""
+    pts = [(float(x), float(y)) for x, y in corners]
+    area = cx = cy = 0.0
+    for (x0, y0), (x1, y1) in zip(pts, pts[1:] + pts[:1]):
+        w = x0 * y1 - x1 * y0
+        area, cx, cy = area + w, cx + (x0 + x1) * w, cy + (y0 + y1) * w
+    return {"shape": "circle", "x0": round(cx / (3.0 * area), 3), "y0": round(cy / (3.0 * area), 3),
+            "theta0": 0.0, "circle_speed": 0.001, "kappa": 0.0}
+
+
+def fit_bowtie(corners, margin, kappa_max, corner_radius=0.0, a_max=2.0, aspect=0.5, speed=0.14,
+               slack=0.05):
     """Controller parameters of the largest bowtie inside the safety polytope `corners`
     (counter-clockwise, convex): {shape, x0, y0, theta0, a, b, period}.
 
     The centre is the centroid of the polygon and the long side runs along its longest
     edge. The corners (+-a, +-b) with b = aspect * a keep margin + slack from every edge;
-    the path itself is inside them because its corners are arcs. a is at most a_max and
-    at least what the corner arcs of curvature kappa_max need. The lap time gives about
+    the path itself is inside them because its corners are arcs of corner_radius, or of
+    1 / kappa_max when that is 0. a is at most a_max and at least what those arcs need. The lap time gives about
     `speed` m/s. A ValueError says by how much the area is too small.
 
     Of the two directions along the longest edge, the one is taken in which a stand
@@ -100,7 +114,8 @@ def fit_bowtie(corners, margin, kappa_max, a_max=2.0, aspect=0.5, speed=0.14, sl
                    for u in (-a, a) for v in (-b, b))
 
     need = margin + slack
-    a_min = math.tan(math.pi / 4 + diagonal / 2) / (kappa_max * aspect)
+    radius = corner_radius or 1.0 / kappa_max
+    a_min = math.tan(math.pi / 4 + diagonal / 2) * radius / aspect
     if clearance(a_min) < need:
         raise ValueError(
             f"the safe area is too small for a bowtie: the smallest one, {2 * a_min:.1f} m by "
@@ -117,7 +132,6 @@ def fit_bowtie(corners, margin, kappa_max, a_max=2.0, aspect=0.5, speed=0.14, sl
     b = aspect * a
     # length of the lap: two diagonals and two short sides, each corner cut by an arc
     turn = math.pi / 2 + diagonal
-    radius = 1.0 / kappa_max
     lap = 4.0 * math.hypot(a, b) + 4.0 * b - 4.0 * radius * (2.0 * math.tan(turn / 2) - turn)
     return {"shape": "bowtie", "x0": round(cx, 3), "y0": round(cy, 3), "theta0": round(theta0, 4),
             "a": float(a), "b": float(b), "period": round(lap / speed, 1)}

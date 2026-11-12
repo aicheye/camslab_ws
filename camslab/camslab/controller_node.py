@@ -18,7 +18,7 @@ from .trajectory import check_limits, make_shape, reference
 from .types import Params, State
 
 TRAJECTORY_FIELDS = ("x0", "y0", "theta0", "circle_speed", "kappa", "a", "b", "period",
-                     "phi0", "kappa_max", "w_max")
+                     "phi0", "kappa_max", "w_max", "corner_radius")
 GAIN_FIELDS = ("k_par", "k_perp", "k_q", "v_max")
 ZERO_SECONDS = 1.0
 PATH_POINTS = 600

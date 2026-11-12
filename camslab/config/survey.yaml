@@ -19,18 +19,19 @@ camera_delay: 0.05               # image latency [s]; the batch check of a recor
 # which sends zero once no command arrived for 0.5 s. driver_cmd_vel is the Twist topic
 # the car's driver listens on (`ros2 topic list` on the car while the driver runs). With
 # drive false nothing here commands the car.
-drive: true
-driver_cmd_vel: /cmd_vel
+drive: teleop                    # teleop: driven with `ros2 run camslab car teleop`; true: the bowtie
+driver_cmd_vel: /robot_1/cmd_vel
 
 # The path, on top of params.yaml: a bowtie, fitted into the safe area. Whenever the safe
 # area is set in the web UI, and at every launch with a saved one, the centre, the
 # direction and the size of the bowtie are set to the largest one that fits, at most 4 m
-# by 2 m, driven at 0.14 m/s (0.42 rad/s in the corners). Nothing about the path is set
+# by 2 m, driven at 0.14 m/s (0.28 rad/s in the corners). Nothing about the path is set
 # here but the car's limits. The car starts at the centre of the area, along a diagonal.
 controller:
   shape: bowtie
   period: 80.0                   # [s], until a safe area is set
-  kappa_max: 2.9                 # the R2's steering limit [1/m]; the corners are arcs of this curvature
+  kappa_max: 2.9                 # the R2's steering limit [1/m]
+  corner_radius: 0.5             # the corners are arcs of this radius [m]; 0: 1 / kappa_max = 0.34 m
   v_max: 0.4                     # [m/s], also the relay's limit on the car
   w_max: 2.0                     # [rad/s], also the relay's limit on the car
 

@@ -275,10 +275,10 @@ calibration is reported instead of guessed.
 | `name` | the car's ROS namespace and its rigid body name in the motion capture |
 | `camera_host` | the car as `user@address`; the camera node and the command relay are uploaded and started there over ssh. Empty: the camera node runs on this computer |
 | `camera` | the calibration: a name in `config/cameras/` or a path to a file |
-| `mocap_server` | the motion capture's VRPN server |
+| `mocap_server` | the motion capture's VRPN server. `python3 scripts/find_vicon.py` looks for it on every network this computer is on, without ROS |
 | `camera_delay` | image latency [s]; the robot pose is taken this long before the image stamp. The batch check of a recorded run prints the value of this camera |
-| `drive`, `driver_cmd_vel` | whether the path controller and the command relay run, and the Twist topic of the car's driver |
-| `controller` | controller parameters on top of `params.yaml`, as in {doc}`configuration`: `kappa_max`, `v_max`, `w_max`. The bowtie's centre, direction, size and lap time are fitted into the safe area and are not set here |
+| `drive`, `driver_cmd_vel` | `teleop`: the car is driven with `car teleop`; `true`: the path controller drives the bowtie; `false`: nothing here commands the car. And the Twist topic of the car's driver |
+| `controller` | controller parameters on top of `params.yaml`, as in {doc}`configuration`: `kappa_max`, `v_max`, `w_max` and `corner_radius`, the radius of the bowtie's corner arcs [m] (0: `1 / kappa_max`). The bowtie's centre, direction, size and lap time are fitted into the safe area and are not set here |
 | `marker_ids`, `marker_height`, `marker_height_known` | the markers in the room, their centre heights above the motion capture's z = 0 plane and which of them the estimator may use. An error in a known height goes into the camera height and into every marker height as the mean over the stored height observations: one of three heights 10 mm too high puts all of them about 4 mm too high |
 
 What is the same for every car and survey of the lab is in `DEFAULTS` of
@@ -293,6 +293,7 @@ What is the same for every car and survey of the lab is in `DEFAULTS` of
 | `video_device`, `image_width`, `image_height`, `framerate`, `pixel_format` | `/dev/video0`, 640, 480, 30, `yuyv` | the camera, as `v4l2-ctl --list-formats-ext` reports it |
 | `nominal_fov` | 0 | horizontal field of view [deg] used while `camera` is empty; 0 requires a calibration |
 | `preview_rate` | 2 | JPEG frames per second streamed from the car for RViz and `car status --show`; 0 for none |
+| `record_video` | false | the car keeps every camera frame on its own disk; `ros2 run camslab car video` copies them here |
 | `dictionary`, `marker_size` | `DICT_4X4_50`, 0.14 | the printed markers. The camera node publishes only the ids of `marker_ids`, because floor and shelf texture decodes as a random id of a 4x4 dictionary now and then |
 | `min_marker_pixels`, `ambiguity_ratio` | 30, 2 | which detections become observations: the shortest side in the image [px] and the ratio of the two pose solutions' reprojection errors; 0 switches a check off |
 | `max_yaw_rate` | 0.5 | the estimator skips an image taken while the car turned faster [rad/s]; 0 for no limit |
@@ -333,9 +334,9 @@ the car passed the test with its wheels off the floor in
 
 3. **A lap without the stands.** Put the car in the middle of the area, pointing along
    the orange path where it leaves the centre. Press **Start** and stay within reach
-   for the lap; **Stop** stops it. If the car runs wide in the corners, it cannot steer
-   as tightly as `kappa_max` says: set `kappa_max: 2.0` in `survey.yaml` and start the
-   launch again.
+   for the lap; **Stop** stops it. If the car runs wide in the corners, raise
+   `corner_radius` in `survey.yaml` (0.5 m; at most 0.6 m for the full-size bowtie) and
+   start the launch again.
 
 4. **The stands.** A stand goes about half a metre past a corner of the bowtie, on the
    line the car drives toward that corner on, facing the car as it comes. The car turns
@@ -373,6 +374,57 @@ the car passed the test with its wheels off the floor in
    laps, press **Stop**, and end the recording with Ctrl-C. During the run the `markers` line of `car status` names each marker as the
    car drives toward it, and the dashed covariance radii appear in the web UI's camera
    panel once both adaptive laws are on.
+
+**Driving by hand.** Instead of steps 2, 3 and the bowtie of step 5, the car can be
+driven from the keyboard, with the stands anywhere:
+
+    ros2 run camslab car teleop
+
+A key drives while it is held: `w` forward, `q` and `e` forward to the left and right,
+`s`, `z`, `c` the same backward, space stops, `+` `-` change the speed, `[` `]` the
+steering curvature, `r` resets the estimator and `x` quits. The commands go through the
+relay on the car, which stops the car when no key is held. The safe area of the web UI
+stays in force: outside it, or without a motion capture pose, only a command that
+drives back the way the car came is passed on. Set `drive: teleop` in `survey.yaml`
+for this: the web UI then draws no path, takes any safe area, and its **Start** only
+resets the estimator and the plots. Below the keys it shows the
+status of `car status`, with the estimator's report: per marker a bar of the straight
+pairs and one of the turn pairs formed, and a bar per adaptive law that is full when
+the law switches on. Drive straight toward each marker for a metre or more (straight
+pairs), and past each marker in a curve while it stays in view (turn pairs), until
+every bar is full. Press `r` when the car is in place, to start the estimator from
+zero.
+
+`car teleop` records the run by itself, from its start to `x`, into
+`surveys/<name>_<date>_<time>`: the robot pose, the observations, the estimator's
+output and report, the commands, the camera's preview images, the motion capture's
+`marker_<id>` bodies and the car driver's speed and inertial measurements, with a copy
+of `survey.yaml` and the commit of this repository. `--no-record` switches it off.
+
+The camera's frames do not cross the network, so the recording has only the preview at
+2 Hz. To keep every frame, start the launch with `record_video:=true`: the camera node
+then writes them on the car, as Motion JPEG with the stamp of each frame in a CSV, at
+2 to 4 MB/s, which the car's 22 GB of free disk holds for more than an hour. A writing
+problem stops the frame recording and not the camera node. Afterwards
+
+    ros2 run camslab car video
+
+copies the recordings to `surveys/video` here and prints the command that frees the
+car's disk.
+
+On hardware the web UI plots, besides the two error panels of the simulation: the
+position error of each fiducial against the motion capture with the covariance radius,
+the camera orientation and position estimates, the four covariance radii, the
+excitation of the two laws against their gate, and the pairs formed per marker.
+**Download CSV** saves all of them.
+
+**Markers in the motion capture.** A stand that is also a rigid body `marker_<id>` in
+the motion capture, with its origin at the marker's centre, gives the truth of that
+marker's position. A body whose origin is not at the marker's centre, for instance on
+the floor, gives the horizontal position, and `marker_height` is taken as the height.
+The report and the plots then show the distance of the estimated position to it,
+and `car teleop` records it. With `ros2 bag record` by hand, add its topic,
+`/vrpn_mocap/marker_<id>/pose`.
 
 Afterwards, on any computer, fit the recording ([Ground truth](#ground-truth)):
 
