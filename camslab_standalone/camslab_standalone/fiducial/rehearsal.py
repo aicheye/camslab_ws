@@ -183,14 +183,16 @@ BEYOND = 0.6    # how far past a corner a stand is put [m]
 
 def corner_stands(params: Params, beyond: float = BEYOND) -> list:
     """The stands as the guide places them: one past each corner of the bowtie, on the
-    line the car arrives on, facing the car. In the frame of the path."""
+    line the car arrives on, facing the car. In the frame of the path, in the order of
+    the marker ids: past the ends of the two diagonals, then of the two short sides,
+    so that markers 0 and 2 alone stand at opposite corners."""
     a, b = params.a, params.b
     diagonal = math.atan2(b, a)
     u = beyond * math.cos(diagonal), beyond * math.sin(diagonal)
     return [{"stand": "upright", "x": -a - u[0], "y": b + u[1], "facing": -math.degrees(diagonal)},
             {"stand": "overhang", "x": a + u[0], "y": b + u[1], "facing": math.degrees(diagonal) - 180.0},
-            {"stand": "diamond", "x": -a, "y": -b - beyond, "facing": 90.0},
-            {"stand": "faceup", "x": a, "y": -b - beyond, "facing": 90.0}]
+            {"stand": "diamond", "x": a, "y": -b - beyond, "facing": 90.0},
+            {"stand": "faceup", "x": -a, "y": -b - beyond, "facing": 90.0}]
 
 
 def placed_stands(settings: dict) -> list:
@@ -199,7 +201,8 @@ def placed_stands(settings: dict) -> list:
     [deg] in the frame of the path. Its origin is the path's centre (x0, y0) and its x
     axis points along theta0, so the layout moves and turns with the path."""
     ids = settings["marker_ids"]
-    stands = settings.get("stands") or corner_stands(survey_params(settings))[:len(ids)]
+    corners = corner_stands(survey_params(settings))
+    stands = settings.get("stands") or [corners[int(i)] for i in ids if 0 <= int(i) < len(corners)]
     if len(stands) != len(ids):
         raise ValueError(f"`stands` has {len(stands)} entries, marker_ids has {len(ids)}; the "
                          "rehearsal needs one planned stand per marker")

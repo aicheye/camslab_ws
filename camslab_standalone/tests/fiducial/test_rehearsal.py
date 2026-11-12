@@ -69,7 +69,10 @@ def test_a_marker_outside_the_image_or_seen_from_behind_is_not_accepted():
 
 
 def survey_settings():
-    return car.load_settings(os.path.join(rehearsal.config_dir(), "survey.yaml"))
+    """config/survey.yaml with all four stands, whichever of them are in the lab."""
+    settings = car.load_settings(os.path.join(rehearsal.config_dir(), "survey.yaml"))
+    return {**settings, "marker_ids": [0, 1, 2, 3], "marker_height": [0.10, 0.09, 0.14, 0.13],
+            "marker_height_known": [True, True, True, False]}
 
 
 def test_the_planned_stands_are_away_from_the_cayley_singularity_and_the_path():
@@ -97,16 +100,30 @@ def test_the_stands_are_past_the_corners_and_move_with_the_path():
     settings["controller"] = {**settings["controller"], "x0": 2.0, "y0": 1.0, "theta0": 0.0}
     home = rehearsal.placed_stands(settings)
     # past the corner (4, 0), which the car reaches driving in the -y direction
-    assert [home[3]["x"], home[3]["y"], home[3]["facing"]] == pytest.approx([4.0, -0.6, 90.0])
+    assert [home[2]["x"], home[2]["y"], home[2]["facing"]] == pytest.approx([4.0, -0.6, 90.0])
     # past the corner (4, 2) on the diagonal from (0, 0)
     d = math.atan2(1.0, 2.0)
     assert [home[1]["x"], home[1]["y"]] == pytest.approx([4.0 + 0.6 * math.cos(d), 2.0 + 0.6 * math.sin(d)])
     assert home[1]["facing"] == pytest.approx(math.degrees(d) - 180.0)
     settings["controller"] = {**settings["controller"], "x0": -1.0, "y0": 3.0, "theta0": math.pi / 2}
     moved = rehearsal.placed_stands(settings)
-    assert [moved[3]["x"], moved[3]["y"], moved[3]["facing"]] == pytest.approx([0.6, 5.0, 180.0])
+    assert [moved[2]["x"], moved[2]["y"], moved[2]["facing"]] == pytest.approx([0.6, 5.0, 180.0])
     planned = {**settings, "stands": [{"stand": "upright", "x": 1.0, "y": 0.0, "facing": 0.0}] * 4}
     assert [rehearsal.placed_stands(planned)[0][k] for k in ("x", "y", "facing")] == pytest.approx([-1.0, 4.0, 90.0])
+
+
+def test_two_stands_identify_everything_when_one_is_past_a_short_side():
+    """With the upright and the diamond stand only: the stand past the end of a short
+    side is seen while the car turns onto that side, which gives the rotation pairs.
+    Two stands past the ends of the diagonals give none, and the camera position is
+    not identified."""
+    settings = {**survey_settings(), "marker_ids": [0, 2], "marker_height": [0.10, 0.14],
+                "marker_height_known": [True, True]}
+    corners = rehearsal.corner_stands(rehearsal.survey_params(settings))
+    assert [s["stand"] for s in rehearsal.placed_stands(settings)] == ["upright", "diamond"]
+    assert rehearsal.rehearse(settings, laps=2, dt=0.1)["ready"] == (True, True)
+    bad = {**settings, "stands": [corners[0], {**corners[1], "stand": "diamond"}]}
+    assert rehearsal.rehearse(bad, laps=2, dt=0.1)["ready"] == (True, False)
 
 
 def test_the_bowtie_is_fitted_into_the_safe_area():

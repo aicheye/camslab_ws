@@ -29,15 +29,13 @@ placement except the height of at least one marker above the floor.
   RoboMaster S1 of {doc}`running` or a Yahboom ROSMASTER R2 both work; the estimator only
   needs the pose.
 - A USB camera fixed to the car, anywhere, looking in any direction. Its intrinsics come
-  from a calibration file in `config/cameras/`; calibrate once per camera model (below). A rolling shutter is acceptable at the lab's speeds.
-- At least three printed ArUco markers of one dictionary (the default is `DICT_4X4_50`,
-  ids 0 to 3), side 0.14 m, stood up on tripods or taped to walls at a known height. Measure
-  the height of each marker's centre above the motion capture floor; the estimator needs
-  at least one of them (Assumption 3 of the paper). Keep the markers well separated in
-  angle so that each is seen from more than one heading. `hardware/marker_mounts/` has
-  printable one-piece stands that hold a marker upright, face down toward the car,
-  rolled by 45 degrees, and tilted back and rolled; its README gives the heights and the
-  angles at which the R2's camera sees each.
+  from a calibration file in `config/cameras/`; calibrate once per camera model (below).
+  A rolling shutter is acceptable at the lab's speeds.
+- Two or more printed ArUco markers of `DICT_4X4_50`, side 0.14 m, on the printable
+  stands of `hardware/marker_mounts/`, whose README gives each stand's marker height.
+  The estimator needs the height of at least one marker's centre above the motion
+  capture floor (Assumption 3 of the paper). `marker_ids` in `survey.yaml` lists the
+  markers in the room.
 
 ## Software
 
@@ -74,6 +72,28 @@ Here, build the workspace with `camslab` and `camslab_webui` ({doc}`install`), s
 
     ros2 run camslab car setup
 
+It accepts the car's ssh host key, creates an ssh key for this computer if it has none
+and installs it on the car (asks the car's password once), then checks the container,
+ROS, the Python modules, that the node uploads and runs, the camera device, that the
+pixel format and image size are among the camera's formats, and the car's clock. Fix
+any `FAIL` line it prints and run it again. Run it once for every car and computer, and
+again for a car at a new address: the launch files run over ssh without a terminal, so
+they stop at once when the car would prompt.
+
+The clock matters: the observations are stamped by the car and the motion capture poses
+by this computer, and the estimator pairs them by time, so an offset above 20 ms fails
+the check. The Jetson has no battery-backed clock, starts months behind after every
+power-up and drifts about 20 ms in ten minutes. Two ways to set it:
+
+- `ros2 run camslab car clock` sets it once over ssh. It changes nothing on this
+  computer; run it after the car is switched on and again before each survey run.
+- `ros2 run camslab car chrony` makes the car's clock follow this computer's for good.
+  Here it adds `allow <car address>` and `local stratum 10` to `/etc/chrony.conf` and a
+  firewalld rule that accepts NTP from that one address; on the car it installs chrony,
+  or configures `systemd-timesyncd` when chrony cannot be installed without internet.
+  Both sides ask for sudo. Run it again when this computer gets another address on the
+  lab network. Use it on your own computer, not on a borrowed one.
+
 When a car's address is unknown (no display on the car),
 
     ros2 run camslab car find
@@ -83,31 +103,8 @@ prints, for each, whether its ssh host key is the car image's (every car is flas
 the same image, so they all share it), whether the login works, and its hostname and
 Jetson serial number. The serial tells identical cars apart; unplugging one does too.
 
-It accepts the car's ssh host key and installs this computer's ssh key on the car (asks
-the car's password once), then checks the container, ROS, the Python modules, that the
-node uploads and runs, the camera device, that the configured pixel format and image size
-are among the camera's formats, and the car's clock. The clock matters: the observations
-are stamped by the car and the motion capture poses by this computer, and the estimator
-pairs them by time, so an offset above 20 ms fails the check. The Jetson has no
-battery-backed clock, starts months behind after every power-up and drifts about 20 ms
-in ten minutes, so once per car
-
-    ros2 run camslab car chrony
-
-makes its clock follow this computer's: here it adds `allow <car address>` and
-`local stratum 10` to `/etc/chrony.conf` and a firewalld rule that accepts NTP from that
-one address in the zone of the interface toward the car (nothing is opened to anyone
-else); on the car's host it installs chrony, or configures `systemd-timesyncd` when
-chrony cannot be installed without internet, with this computer as the only time source.
-Both sides ask for sudo. It then waits for the offset to come under 20 ms and prints it.
-Run it again when this computer gets another address on the lab network, since the car
-is configured with that address. `ros2 run camslab car clock` sets the clock once over
-ssh instead, for a quick session without chrony. Fix any `FAIL` line setup prints and run
-it again. Run it once for every car, and again
-for a car at a new address: `camera` and `calibrate` run over ssh without a terminal, so
-they stop at once, instead of waiting for images, when the car would prompt. Every `car`
-command and the launch files read `config/survey.yaml`; a value is overridden on the
-command line as `name:=yahboom1`.
+Every `car` command and the launch files read `config/survey.yaml`; a value is
+overridden on the command line as `name:=bodies`.
 
 To see the camera alone,
 
@@ -313,8 +310,8 @@ path is fitted into the safe area, and the stands go by eye.
 
 Before the session, once per car and computer: `ros2 run camslab car setup` passes, and
 the car passed the test with its wheels off the floor in
-[Driving and safety](#driving-and-safety). Bring the stands with markers 0 to 3 glued
-on and 200 g for the foot of the overhang stand.
+[Driving and safety](#driving-and-safety). Bring the stands of `marker_ids` in
+`survey.yaml` with their markers glued on.
 
 1. **Motion capture.** Define the car as a rigid body named like `name` in
    `survey.yaml`, with its origin at the rear-axle centre, x forward and z up. Switch
@@ -340,12 +337,31 @@ on and 200 g for the foot of the overhang stand.
    as tightly as `kappa_max` says: set `kappa_max: 2.0` in `survey.yaml` and start the
    launch again.
 
-4. **The stands.** Put one stand about half a metre past each of the four corners of
-   the bowtie, on the line the car drives toward the corner on, facing the car as it
-   comes. The car turns before it reaches them. Put the 200 g on the foot of the
-   overhang stand. Exact places do not matter, because the survey estimates them. If a
-   marker's centre is not at the height in `marker_height` to within 2 mm, correct the
-   value and start the launch again.
+4. **The stands.** A stand goes about half a metre past a corner of the bowtie, on the
+   line the car drives toward that corner on, facing the car as it comes. The car turns
+   before it reaches the stand. Exact places do not matter, because the survey
+   estimates them. Seen with the long side across the page, the car drives
+   X, B, D, A, C, X:
+
+       A               B        A, B: the corners where a diagonal ends
+       |\             /|
+       | \           / |
+       v  \         /  v        both short sides are driven this way
+       |   \       /   |
+       |    \     /    |
+       |      X        |        X: the centre, where a lap starts
+       |    /     \    |
+       |   /       \   |
+       C               D        C, D: the corners where a short side ends
+
+   With four stands, one goes past each corner. With two, put one past A or B and the
+   other past the opposite one of C and D: past A, on the line from D, facing D, and
+   past D, on the line from B, facing B. The stand past C or D is seen while the car
+   turns onto the short side, which the camera position needs. With both stands past A
+   and B the car only ever drives straight at them, and the camera position is not
+   identified. Put 200 g on the foot of an overhang stand. If a marker's centre is not
+   at the height in `marker_height` to within 2 mm, correct the value and start the
+   launch again.
 
 5. **The survey.** Start the recording in a third terminal, in the repository folder
    and with the car's name in the topics:
@@ -353,8 +369,8 @@ on and 200 g for the foot of the overhang stand.
        ros2 bag record -o survey_1 /angostura/pose /angostura/observations /angostura/estimate
 
    Set the clock again (`ros2 run camslab car clock`), put the car in the middle as in
-   step 3 and press **Start**, which also resets the estimator. Let it drive four laps, press **Stop**, and end the recording with
-   Ctrl-C. During the run the `markers` line of `car status` names each marker as the
+   step 3 and press **Start**, which also resets the estimator. Let it drive four
+   laps, press **Stop**, and end the recording with Ctrl-C. During the run the `markers` line of `car status` names each marker as the
    car drives toward it, and the dashed covariance radii appear in the web UI's camera
    panel once both adaptive laws are on.
 
@@ -365,7 +381,7 @@ Afterwards, on any computer, fit the recording ([Ground truth](#ground-truth)):
 
 What the placement needs: every marker is seen while the car drives straight toward
 it, and at least one is seen from two directions 30 degrees or more apart, which the
-turn before a corner gives. A marker is used up to about 2 m away. A marker whose face
+turn onto a short side gives. A marker is used up to about 2 m away. A marker whose face
 points along the motion capture's +y axis, to within 40 degrees, gets a poor
 orientation estimate, because that orientation is the singularity of the estimator's
 coordinates; its position and the camera's mount are not affected. The fit turns the
@@ -400,7 +416,8 @@ This uploads and starts the camera node on the car over ssh (with the intrinsics
 `sensor: aruco`, RViz with the preview image and the web UI on <http://127.0.0.1:8000>.
 With `drive: true` it also starts the path controller and the command relay on the car,
 see [Driving and safety](#driving-and-safety). The path is a bowtie fitted into the
-safe area and the stands go past its corners ([A survey session](#a-survey-session)): the camera orientation needs both pure translations and turns
+safe area and the stands go past its corners ([A survey session](#a-survey-session)):
+the camera orientation needs both pure translations and turns
 (`docs/fiducial-hints.md`), and with the real camera's limits a gerono gives no pure
 translation.
 
@@ -429,9 +446,10 @@ follow, three Cayley components and three positions per marker, in `marker_ids` 
 ## Driving and safety
 
 With `drive: true` in `survey.yaml`, `survey.launch.py` runs the path controller of
-{doc}`running` on this computer and the web UI controls it: **Start** and **Stop**, the
-path ({doc}`paths`) and the safe area ({doc}`safety-area`). The controller starts
-disabled and drives only after **Start**. With `drive: false` nothing here commands the
+{doc}`running` on this computer and the web UI controls it: **Start** and **Stop** and
+the safe area ({doc}`safety-area`), into which the path is fitted. The controller starts
+disabled and drives only after **Start**, and the web UI refuses **Start** until a safe
+area is set. With `drive: false` nothing here commands the
 car and it is driven with its own teleop.
 
 The car's own driver must be running on the car; it is not started from here. The
@@ -459,10 +477,9 @@ car's own clock, so it does not depend on the clock synchronization.
 
 Nothing here sees obstacles or people. The safe area is a convex polygon for the
 rear-axle centre: the front of the car reaches 0.2 m beyond it, and leaving it is
-detected after the car crossed the edge, so keep the edge at least 0.5 m from walls and
-keep every marker stand outside it. A marker is used up to about 2 m away
-([Which images are used](#which-images-are-used)), so stands 0.5 m outside the edge are
-in range of a path near the edge. The relay cannot stop the car if the relay itself or
+detected after the car crossed the edge, so keep the edge at least 0.5 m from walls. A
+stand may be inside the area as long as it is off the path; half a metre past a corner
+of the bowtie is about 0.7 m from the path. The relay cannot stop the car if the relay itself or
 the car's driver hangs; keep the car within reach.
 
 Before the first drive of a car, and after a change of its driver:
@@ -483,14 +500,17 @@ Before the first drive of a car, and after a change of its driver:
 5. Set the safe area in the web UI after every motion capture calibration, then drive the
    first lap with a hand near the car.
 
-The default path of `survey.yaml` is a bowtie of 4.0 m by 2.0 m with a lap of 80 s. It
-is 0.14 m/s on the straight edges, and its corners are arcs at the R2's steering limit of
-2.9 1/m, driven at 0.42 rad/s. The arcs cut the corners, so the path itself is 4.0 m long
-and 1.6 m wide. A lap starts and ends at the centre of the safe area, heading along
+The path is the largest bowtie that fits in the safe area with 0.25 m to its edge, at
+most 4.0 m by 2.0 m, which is a lap of 80 s. It is driven at 0.14 m/s, and its corners
+are arcs at the R2's steering limit of 2.9 1/m, driven at 0.42 rad/s. The arcs cut the
+corners, so the full-size path is 4.0 m long and 1.6 m wide. A lap starts and ends at the centre of the safe area, heading along
 the first diagonal, 27 degrees from the long side. The drawn path and the safe-area check
 cover the whole lap.
 
 ## Rehearsal and stand layout
+
+A survey session does not need this section. It is the simulation behind the placement
+rule of [A survey session](#a-survey-session), for trying another path or layout.
 
 The simulated camera of `docs/fiducial-hints.md` sees every marker at any distance. The
 real one accepts a marker only within about 2.4 m, inside its 63 degree view, facing it
@@ -504,14 +524,16 @@ depends on the path and on where the stands are.
     uv run python -m camslab_standalone.fiducial.rehearsal
 
 runs the simulator with the real camera's acceptance rule, the calibration `camera`,
-`max_yaw_rate`, a measurement noise of 13 mm and 0.7 degrees, the path of the
-`controller` block and the stands past the corners, or those of `stands` in `survey.yaml`. It prints the
-images used per marker, the pairs stored, whether the two adaptive laws switch on and
-the errors after each lap, and it draws the floor plan. Run it again after moving a
-stand or changing the path.
+`max_yaw_rate`, a measurement noise of 13 mm and 0.7 degrees, a full-size bowtie and a
+stand 0.6 m past a corner for each marker of `marker_ids`. It prints the images used
+per marker, the pairs stored, whether the two adaptive laws switch on and the errors
+after each lap, and it draws the floor plan. Another layout is rehearsed with a `stands`
+list in `survey.yaml`: per marker, the stand, its position `x`, `y` [m] from the
+bowtie's centre along and across the long side, and its `facing` [deg] from the long
+side.
 
 ```{image} images/survey-layout.png
-:alt: Floor plan of the bowtie with one marker stand beyond each corner and the stretches of the path on which each marker is in use
+:alt: Floor plan of the bowtie with the upright stand past the end of a diagonal and the diamond stand past the end of a short side, and the stretches of the path on which each marker is in use
 ```
 
 What the rehearsal showed for the lab's camera:
@@ -519,54 +541,45 @@ What the rehearsal showed for the lab's camera:
 - On a gerono no marker gives a pure-translation pair, because the heading never repeats
   while the marker is in view. The orientation law stays off and the camera's
   orientation is not identified. The bowtie's straight edges give the pure-translation
-  pairs and its corners the rotation pairs.
-- A stand about 0.6 m past each corner, on the line the car arrives on and facing the
-  car, is what the rehearsal uses when `survey.yaml` has no `stands`. In two laps on
-  the full bowtie and on one of 2.8 m by 1.4 m, with the stands 0.5 m or 0.75 m past
-  the corners, both laws switched on, with a camera position error of 27 to 36 mm and
-  a marker position error of 27 to 49 mm (one seed each).
-- A layout can be planned and rehearsed instead: `stands` in `survey.yaml` lists, per
-  marker, the stand, its position [m] from the bowtie's centre along and across the
-  long side, and its facing [deg] from the long side. The layout below also gives
-  rotation pairs from the two stands past the short sides. After four laps its camera
-  orientation error is 0.005 to 0.013, its camera position error 16 to 29 mm and its
-  marker position error 24 to 44 mm over three noise seeds.
+  pairs.
+- With four stands, one past each corner, both laws are on after two laps, on the full
+  bowtie and on one of 2.8 m by 1.4 m, with the stands 0.5 m or 0.75 m past the
+  corners. The camera position error is 27 to 36 mm and the marker position error 27
+  to 49 mm (one seed each).
+- With two stands the corners matter:
 
-  | Marker | Stand | Along [m] | Across [m] | Facing [deg] |
-  |---|---|---|---|---|
-  | 0 | upright | -2.75 | 0.95 | -30 |
-  | 1 | overhang | 2.75 | 0.70 | -150 |
-  | 2 | diamond | -2.50 | -1.80 | 120 |
-  | 3 | faceup | 2.50 | -2.05 | 120 |
+  | Stands past | Laps | Both laws on | Camera position error |
+  |---|---|---|---|
+  | A and D | 4 | yes | 26 mm |
+  | C and D | 2 | yes | 19 mm |
+  | A and C | 2 | yes | 45 mm |
+  | A and B | 2 | no | 233 mm |
+
+  A stand past C or D gives the rotation pairs. Past A and B there is none, and the
+  translation law stays off. C and D was run on the full bowtie only; on a small one
+  the short sides have almost no straight part.
 - A marker's orientation is estimated in Cayley coordinates, which are singular for a
-  rotation by 180 degrees from the world frame. Each stand has a range of facings near
-  it, roughly toward +y in motion capture coordinates, which the rehearsal flags:
-
-  | Stand | Do not face it between [deg] |
-  |---|---|
-  | upright | 48 and 132 |
-  | overhang | 28 and 152 |
-  | diamond | 3 and 87 |
-  | faceup | 24 and 96 |
-
-  This affects the orientation estimate of that marker only. For a bowtie along the
-  motion capture's y axis one of the stands past the corners faces within 30 degrees
-  of +y; turn that stand by 30 degrees or accept its orientation estimate.
+  rotation by 180 degrees from the world frame. An upright marker is within 30 degrees
+  of it when it faces between 48 and 132 degrees in motion capture coordinates, the
+  overhang between 28 and 152, the diamond between 3 and 87 and the faceup between 24
+  and 96. The rehearsal flags such a stand. It affects the orientation estimate of
+  that marker only. For a bowtie along the motion capture's y axis one of the stands
+  past A and B faces within 30 degrees of +y; turn that stand by 30 degrees or accept
+  its orientation estimate.
 
 The rehearsal does not model lens distortion, markers hiding each other, or the
 ambiguity check. Its car follows the path within 3 mm, and its robot pose has the
 simulation's noise of 0.2 mm and 0.01 degrees of yaw. The motion capture's orientation
-noise and the car's heading error on the floor were not measured. In a run with 0.1
-degrees of noise on all three axes of the robot's orientation and a heading that
-wanders by 2 degrees rms around the path, the simulation's `straight_tol` of 0.0005 rad
-stored no pure-translation pair in four laps and the camera orientation stayed at its
-initial value. The survey's 0.01 rad stored 74 to 85 pairs over three seeds, and 26 to
-31 with 0.3 degrees of noise and 4 degrees of wander. Both laws were on in all six
-runs, with a camera orientation error of 0.003 to 0.008 and a marker position error of
-10 to 52 mm after four laps. With corner arcs of `kappa_max: 2.0` instead of 2.9 both
-laws switch on as well, and the camera position error after four laps is 44 mm (one
-seed). The camera's height of 0.12 m is from `hardware/marker_mounts/README.md`; its
-position 0.20 m ahead of the rear axle is assumed.
+noise and the car's heading error on the floor were not measured. In a run with four
+stands, 0.1 degrees of noise on all three axes of the robot's orientation and a heading
+that wanders by 2 degrees rms around the path, the simulation's `straight_tol` of
+0.0005 rad stored no pure-translation pair in four laps and the camera orientation
+stayed at its initial value. The survey's 0.01 rad stored 74 to 85 pairs over three
+seeds, and 26 to 31 with 0.3 degrees of noise and 4 degrees of wander, and both laws
+were on in all six runs. With corner arcs of `kappa_max: 2.0` instead of 2.9 both laws
+switch on as well. The camera's height of 0.12 m is from
+`hardware/marker_mounts/README.md`; its position 0.20 m ahead of the rear axle is
+assumed.
 
 ## Ground truth
 
@@ -581,11 +594,8 @@ know. Two ways to get them:
   for the online estimate even without a truth, and the online estimate must end inside
   its covariance radius of it.
 
-Record a run with
-
-    ros2 bag record /<name>/pose /<name>/observations /<name>/estimate
-
-and fit it, on any computer, without ROS:
+Record a run as in [A survey session](#a-survey-session) and fit it, on any computer,
+without ROS:
 
     cd camslab_standalone
     uv run python -m camslab_standalone.fiducial.recorded <bag directory>

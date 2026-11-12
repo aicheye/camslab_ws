@@ -34,11 +34,12 @@ controller:
   v_max: 0.4                     # [m/s], also the relay's limit on the car
   w_max: 2.0                     # [rad/s], also the relay's limit on the car
 
-# The markers: ids 0 to 3 of hardware/marker_mounts/markers.pdf, the height of each
+# The markers in the room, ids of hardware/marker_mounts/markers.pdf, the height of each
 # marker's centre above the motion capture's z = 0 plane [m], and which heights the
 # estimator may use (at least one). The heights are the nominal ones of the stands;
-# measure them once the stands are placed. Put one stand about half a metre past each
-# corner of the bowtie, facing the car that drives toward the corner.
-marker_ids: [0, 1, 2, 3]
-marker_height: [0.10, 0.09, 0.14, 0.13]
-marker_height_known: [true, true, true, false]
+# measure them once the stands are placed. A stand goes about half a metre past a
+# corner of the bowtie, facing the car that drives toward the corner. With two stands:
+# one past the end of a short side, the other past the end of a diagonal.
+marker_ids: [0, 2]               # the upright and the diamond stand
+marker_height: [0.10, 0.14]
+marker_height_known: [true, true]

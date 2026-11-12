@@ -54,7 +54,8 @@ def test_the_settings_file_leaves_the_lab_wide_values_to_the_defaults():
         assert key in settings, key
     assert car.camera_file(settings).endswith("angostura_640x480.yaml")
     args = car.node_arguments(settings, car.camera_file(settings))
-    assert args[args.index("--ids") + 1:args.index("--ids") + 5] == ["0", "1", "2", "3"]
+    ids = [str(i) for i in settings["marker_ids"]]
+    assert args[args.index("--ids") + 1:args.index("--ids") + 1 + len(ids)] == ids
     assert args[args.index("--marker-size") + 1] == "0.14"
 
 
