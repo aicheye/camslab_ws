@@ -380,12 +380,14 @@ driven from the keyboard, with the stands anywhere:
 
     ros2 run camslab car teleop
 
-A key drives while it is held: `w` forward, `q` and `e` forward to the left and right,
-`s`, `z`, `c` the same backward, space stops, `+` `-` change the speed, `[` `]` the
-steering curvature, `r` resets the estimator and `x` quits. The commands go through the
-relay on the car, which stops the car when no key is held. The safe area of the web UI
-stays in force: outside it, or without a motion capture pose, only a command that
-drives back the way the car came is passed on. Set `drive: teleop` in `survey.yaml`
+A key drives while it is held, and for 1 s after: `w` forward, `q` and `e` forward to
+the left and right, `s`, `z`, `c` the same backward. Space or any other key stops at
+once, `+` `-` change the speed, `[` `]` the steering curvature, `r` resets the
+estimator and `x` quits. At rest it sends zero 20 times a second, and the relay on the
+car stops the car when the commands stop. The safe area of the web UI stays in force:
+without one the car is held, and outside it, or without a motion capture pose, only a
+command that drives back the way the car came is passed on. Do not drive while a
+large copy from the car, such as `car video`, fills the WiFi. Set `drive: teleop` in `survey.yaml`
 for this: the web UI then draws no path, takes any safe area, and its **Start** only
 resets the estimator and the plots. Below the keys it shows the
 status of `car status`, with the estimator's report: per marker a bar of the straight

@@ -1433,11 +1433,11 @@ def cmd_video(settings: dict, args) -> int:
 TELEOP_KEYS = {  # key: (direction of travel, steering): +1 forward or left, -1 backward or right
     "w": (1, 0), "q": (1, 1), "e": (1, -1), "s": (-1, 0), "z": (-1, 1), "c": (-1, -1),
     "i": (1, 0), "u": (1, 1), "o": (1, -1), ",": (-1, 0), "m": (-1, 1), ".": (-1, -1)}
-# A driving key keeps the car driving until another key, for at most this long [s]. The
-# first version drove only while a key was held, through the keyboard's repeat: the
-# repeat starts after 0.5 s and arrives unevenly, so the car stuttered at the start and
-# ran on for 0.6 s after the release.
-TELEOP_LATCH = 20.0
+# A driving key drives for this long [s]; holding it keeps the car driving through the
+# keyboard's repeat, which starts after 0.5 s, and space stops at once. With 20 s the car
+# kept driving when a stop key did not arrive (another window had the keyboard), and
+# with 0.6 s it stuttered before the repeat started.
+TELEOP_LATCH = 1.0
 
 
 class SafeArea:
@@ -1469,7 +1469,7 @@ class SafeArea:
         """(whether a command with speed v passes, the line for the screen)."""
         self.load()
         if self.area is None:
-            return True, "safe area  none set: set it in the web UI"
+            return v == 0.0, "safe area  NONE SET: the car is held. Set it in the web UI first"
         if pose is None or pose_age is None or pose_age > 0.5:
             return False, "safe area  NO POSE from the motion capture: the car is held"
         distance = self.area.signed_distance((pose.position.x, pose.position.y))
@@ -1497,11 +1497,11 @@ def teleop_command(key: str, speed: float, curvature: float):
 def cmd_teleop(settings: dict, args) -> int:
     """Drives the car from the keyboard through the command relay that
     survey.launch.py runs on the car, records the run (Recording) and shows the
-    estimator's report, to collect the survey's data by hand. A driving key keeps the
-    car driving until space or any other key, or for TELEOP_LATCH seconds; when this
-    program or the network stops, the commands stop and the relay stops the car.
-    Outside the safe area of the web UI only a command that drives back in passes
-    (SafeArea)."""
+    estimator's report, to collect the survey's data by hand. A driving key drives for
+    TELEOP_LATCH seconds, so the car drives while the key is held, and space or any
+    other key stops it at once; at rest it sends zero. When this program or the network
+    stops, the commands stop and the relay stops the car. Without a safe area the car
+    is held, and outside it only a command that drives back in passes (SafeArea)."""
     import termios
     import tty
     from geometry_msgs.msg import Twist
@@ -1568,20 +1568,19 @@ def cmd_teleop(settings: dict, args) -> int:
                 last_publish = now
                 passes, area_line = area.passes(
                     command[0], watch.pose, None if watch.pose_time is None else now - watch.pose_time)
-                if driving:
-                    publish(*(command if passes else (0.0, 0.0)))
-                elif now <= until + 1.0:
-                    publish(0.0, 0.0)
+                # Zero is sent all the time the car is not driven, not only once: a
+                # stop that is lost or late on the WiFi is followed by the next one.
+                publish(*(command if driving and passes else (0.0, 0.0)))
             if now - last_draw > 0.25:
                 last_draw = now
                 v, w = command
-                left = f"   stops by itself in {until - now:2.0f} s" if driving else ""
+                left = ""
                 turn = curvature * speed
                 fast = (f"   images are skipped above {max_yaw_rate:g} rad/s: lower the speed or the "
                         "curvature" if 0.0 < max_yaw_rate < turn else "")
                 screen.draw([
                     header(settings),
-                    "press once to drive:   q w e   forward-left, forward, forward-right",
+                    "hold to drive:         q w e   forward-left, forward, forward-right",
                     "                       z s c   backward-left, backward, backward-right",
                     "SPACE or any other key stops   + - speed   [ ] curvature   r reset the estimator   x quit",
                     f"speed {speed:.2f} m/s, curvature {curvature:.2f} 1/m (turning {turn:.2f} rad/s){fast}",
