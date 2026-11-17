@@ -12,7 +12,7 @@ camera_host: jetson@192.168.1.85
 camera: angostura_640x480
 
 mocap_server: 129.97.71.49       # the lab's VRPN server
-camera_delay: 0.05               # image latency [s]; the batch check of a recorded run prints this camera's
+camera_delay: 0.01               # image latency [s]; the batch check of a recorded run prints this camera's
 
 # Driving. The path controller runs on this computer, disabled until Start is pressed in
 # the web UI. Its commands reach the car's driver through the command relay on the car,
