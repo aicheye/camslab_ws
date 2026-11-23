@@ -12,7 +12,7 @@ chassis_timeout: 0.5             # the S1 stops when cmd_vel is older than this 
 # Pose, through vrpn_mocap. The rigid body is streamed with Z up.
 mocap_server: 129.97.71.49
 mocap_port: 3883
-tracker: ""                      # rigid body name in the mocap software; empty for `name`
+tracker: "angostura"                      # rigid body name in the mocap software; empty for `name`
 
 rviz: true
 webui: true                      # web UI on `port`
