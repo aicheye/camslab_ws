@@ -92,6 +92,24 @@ checks. With no transmitter switched on and no position source, PX4 reported the
 With the transmitter on and the mode switch in Stabilized, the first row clears and the
 vehicle can arm. The other rows remain until a position source is added.
 
+### Telemetry logs
+
+QGroundControl records every MAVLink message of a session and saves the recording when it
+closes:
+
+```text
+~/Documents/QGroundControl/Telemetry/<date> <time>.tlog
+```
+
+Each record is an 8-byte timestamp followed by one MAVLink packet. Over the radio a log
+contains the attitude at about 6 Hz, the attitude setpoint and thrust at about 1 Hz, the
+stick channels at about 1 Hz and the motor outputs at about 0.5 Hz, together with all
+status messages. That is enough to examine a takeoff or a hover, and too slow to examine
+an oscillation. The flight measurements in {doc}`drone` come from these logs.
+
+PX4 also writes a full-rate `.ulg` log of every armed period to its SD card. Download it
+with **Analyze Tools**, then **Log Download**.
+
 ## Telemetry radios
 
 The two radios are from different manufacturers and run different SiK firmware versions.

@@ -4,14 +4,34 @@ PX4 controls a multicopter with nested loops: the rate controller is innermost, 
 attitude controller commands it, and the velocity and position controllers command the
 attitude. Tune them in that order, starting with the rate controller.
 
-This page follows the PX4 1.15 tuning guides. **Not tested:** neither procedure has been
-completed on the {doc}`Q-ball quadrotor <drone>`. The gains on the vehicle on 2026-11-26
-are listed in {doc}`drone`.
+This page follows the PX4 1.15 tuning guides for the {doc}`Q-ball quadrotor <drone>`.
+The gains on the vehicle on 2026-11-26 are listed in {doc}`drone`.
+
+## State of the tuning
+
+Autotune was run for the rate controller and for the attitude controller on 2026-11-26,
+between 16:07 and 16:42, while the vehicle was flown on a tether. It replaced all rate
+and attitude gains.
+
+| Gain | Before (16:07) | After (16:49) |
+|---|---|---|
+| Roll rate P, I, D | 0.15, 0.2, 0.003 | 0.220, 0.248, 0.0014 |
+| Pitch rate P, I, D | 0.15, 0.2, 0.003 | 0.256, 0.274, 0.0032 |
+| Yaw rate P, I, D | 0.2, 0.1, 0 | 0.143, 0.171, 0.0006 |
+| Roll, pitch, yaw attitude P | 4.0, 4.0, 2.8 | 4.35, 3.73, 6.5 |
+
+With the new gains, a 34 s tethered hover in Altitude mode held roll and pitch within
+1.2° (standard deviation). The gains have not been checked in free flight, and gains
+identified on a tether include the tether's effect
+([Tuning on a tether](#tuning-on-a-tether)).
 
 ## Before tuning
 
-- The vehicle must lift off level. The tilt on takeoff described in {doc}`drone-setup`
-  is a setup fault, and no gain corrects it.
+- The vehicle must lift off level. Take off in Altitude mode, or raise the throttle
+  quickly in Stabilized mode ({ref}`tilt-on-takeoff`). No gain corrects that tilt.
+- No motor may be at its output limit. Output 4 reached the 1900 µs limit in hover on
+  2026-11-26 ({doc}`drone`). A saturated motor cannot follow the controller, so the
+  response in the log no longer shows the effect of the gains.
 - Flight logging must be on (`SDLOG_MODE=0` logs from arming to disarming). The telemetry
   radio is too slow for the live plots on QGroundControl's PID Tuning page, so judge each
   flight from its log.
@@ -31,8 +51,10 @@ The vehicle is currently flown on a tether. A tether changes what can be tuned:
 - **Do not run autotune on a tether.** Autotune identifies a model of the vehicle from
   its response to its own torque commands. A taut tether adds a torque that the model
   then includes, so the resulting gains are wrong for free flight.
-- Fly in Stabilized mode. In Altitude mode the altitude controller keeps raising the
-  thrust when the tether stops the climb.
+- Keep the hover height below the tether's length. In Altitude mode the altitude
+  controller keeps raising the thrust when the tether stops a climb, so centre the stick
+  once the vehicle is in the air. Altitude mode gave the cleaner takeoff on this vehicle
+  ({doc}`drone-setup`).
 - Attach the tether under the centre of the frame and keep it slack at hover height. A
   taut line attached below the centre of mass pulls the vehicle level, which hides a P
   gain that is too low.
@@ -71,8 +93,8 @@ little higher than the roll gain.
 ### Attitude controller
 
 After the rate controller, adjust `MC_ROLL_P`, `MC_PITCH_P` and `MC_YAW_P`. Lower a gain
-if the vehicle overshoots the commanded angle. The vehicle currently has 4.0 for roll and
-pitch. The PX4 default is 6.5.
+if the vehicle overshoots the commanded angle. The vehicle currently has 4.35 for roll
+and 3.73 for pitch. The PX4 default is 6.5.
 
 ### Reading a flight log
 
@@ -92,7 +114,8 @@ computes the rate and attitude gains from it.
 
 PX4 asks for free flight at 4 to 20 m above the ground in a clear space. That condition
 cannot be met on a tether, and it was not checked whether the lab's flight space allows
-it.
+it. The run of 2026-11-26 was made on the tether, so repeat it in free flight before
+relying on the gains.
 
 1. Take off in Altitude mode and hover.
 2. Check the stability first. Tilt the vehicle about 20 degrees with the stick and
@@ -106,8 +129,9 @@ it.
 5. Land and disarm. With `MC_AT_APPLY=1`, the new gains are applied after disarming.
 6. Fly again and check for oscillation.
 
-Altitude mode cannot currently be selected from the transmitter on this vehicle, because
-its switch position also engages the kill switch ({ref}`radio-and-modes`).
+On 2026-11-26 the Altitude slot of the flight mode switch was in the position that also
+engages the kill switch ({ref}`radio-and-modes`). Assign Altitude to another slot or move
+the kill switch before starting.
 
 ## Reading
 

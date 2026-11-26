@@ -1,15 +1,14 @@
 # Set up the quadrotor for flight
 
 This page is the bench procedure for the {doc}`Q-ball quadrotor <drone>`: wiring, motor
-test, ESC calibration, radio control, sensor calibration and a first hover. It ends with
-the checks for the unresolved tilt on takeoff and the method used to splice the motor
-wires.
+test, ESC calibration, radio control, sensor calibration and takeoff. It ends with the
+explanation of the tilt on takeoff and the method used to splice the motor wires.
 
 All menu paths are for QGroundControl 5.1.5. Open the setup pages with the **Q** icon at
 the top left, then **Vehicle Configuration**.
 
 ```{warning}
-Remove all four propellers before every step on this page except the first hover. The
+Remove all four propellers before every step on this page except the takeoff. The
 motor test and a failed ESC calibration can run a motor at full speed.
 ```
 
@@ -20,7 +19,7 @@ motor test and a failed ESC calibration can run a motor at full speed.
 | [ESC calibration](#esc-calibration) | 3 min |
 | [Radio control and flight modes](#radio-control-and-flight-modes) | 10 min |
 | [Sensor calibration](#sensor-calibration) | 5 min |
-| [First hover](#first-hover) | 10 min |
+| [Takeoff and hover](#takeoff-and-hover) | 10 min |
 
 ## Wiring
 
@@ -137,9 +136,12 @@ transmitter switch to channel 6 or 7, calibrate the radio again, and set
 
 ### Arming
 
-Arm with the stick gesture: hold the throttle stick down and to the right for one second.
-The motors start idling. Disarm by holding it down and to the left. This assumes that
-throttle and yaw are on the left stick.
+The vehicle arms and disarms with the switch on channel 6 (`RC_MAP_ARM_SW=6`). The motors
+start idling when it arms. PX4 disables the stick gesture while an arm switch is assigned.
+With no arm switch assigned, hold the throttle stick down and to the right for one second
+to arm, and down and to the left to disarm.
+
+PX4 refuses to arm while the throttle stick is raised ("Arming denied: high throttle").
 
 When arming is refused, click **Not Ready** in the toolbar to read the reason. The
 common reasons are listed in {doc}`drone-connect`.
@@ -184,14 +186,43 @@ Two observations from that session:
   check the heading, leave the vehicle untouched for 60 seconds and watch the compass
   heading in QGroundControl.
 
-## First hover
+## Takeoff and hover
+
+Take off in Altitude mode. In this mode the throttle stick commands a climb rate and PX4
+performs the takeoff, so the stick position does not have to be precise. Altitude mode
+uses the barometer and needs no position estimate.
 
 1. Complete every step above with the propellers off.
 2. Fit the propellers according to {doc}`drone`.
-3. Tether the vehicle or fly it inside a net.
-4. Arm in Stabilized mode and raise the throttle slowly until the vehicle is light on
-   its feet. Lower the throttle at once if it tips or spins.
-5. Hover at about 0.5 m for 30 seconds, land, and disarm.
+3. Tether the vehicle or fly it inside a net. Leave more than 1 m of slack in a tether.
+4. Select Altitude mode and arm.
+5. Push the throttle stick to about three quarters and hold it there. PX4 raises the
+   thrust over about 3 seconds and the vehicle lifts off.
+6. Centre the stick as soon as the vehicle is in the air. It then holds its height.
+7. To land, lower the stick slightly below centre. Disarm after touchdown.
+
+Measured on 2026-11-26 in two tethered flights:
+
+- During the thrust ramp on the ground, roll and pitch moved by less than 0.4°.
+- About one second after liftoff, roll and pitch moved by about 4° and recovered within
+  a second.
+- In a 34 s hover, the roll and pitch errors had a standard deviation of 1.2°.
+- The height reported by the barometer varied between 0.25 and 1.2 m, with about ±0.5 m
+  of noise. Expect the hover height to wander by that amount.
+- With the stick at the bottom, the vehicle descended fast enough to bounce to 19° of
+  roll at touchdown.
+
+Three settings to review before flying in Altitude mode on a tether. They were read from
+the vehicle at 16:49, before those flights, and may have been changed since:
+
+| Parameter | Value read | Note |
+|---|---|---|
+| `MPC_TKO_SPEED` | 1.5 m/s | Climb speed during takeoff. 0.5 m/s suits a tether. |
+| `MPC_Z_VEL_MAX_UP` | 3 m/s | Climb rate at full stick. 1 m/s suits a tether. |
+| `MPC_THR_HOVER` | 0.5 | The measured hover thrust is 0.72. |
+
+If a tether stops a climb, the altitude controller adds thrust. Centre the stick so that
+the vehicle holds a height below the tether's length.
 
 Flying by hand needs the RC transmitter. A joystick through QGroundControl sends the
 sticks over the telemetry radio, where the round trip is about 250 ms.
@@ -199,27 +230,82 @@ sticks over the telemetry radio, where the round trip is about 250 ms.
 (tilt-on-takeoff)=
 ## Tilt on takeoff
 
-On 2026-11-23 the vehicle tilted as soon as thrust came up. More throttle makes a tilting
-vehicle flip, so remove the propellers before investigating. The cause has not been
-identified. The candidates, in the order to test them:
+On 2026-11-23 the vehicle tilted as soon as thrust came up in Stabilized mode. The
+telemetry logs of that day and of 2026-11-26 explain it.
+
+### Cause
+
+In Stabilized mode the attitude controller is active while the vehicle still stands on
+the ground:
+
+1. The vehicle rests a few degrees off level according to the estimator, while the sticks
+   command a level attitude.
+2. PX4 reports "Takeoff detected" once the throttle leaves the bottom of its range, at 1
+   to 36% thrust in the logs. The vehicle needs about 65 to 72% to lift. From that
+   message on, the rate integrator runs.
+3. The vehicle cannot rotate while it stands on its feet, so the attitude error stays and
+   the integrator keeps raising the motors on the low side and lowering the others.
+4. When the feet leave the ground, the stored difference rotates the vehicle. A larger
+   resting tilt or a slower throttle rise gives a larger rotation.
+
+| Flight | Resting attitude | Outputs before liftoff | At liftoff |
+|---|---|---|---|
+| 2026-11-23 16:10, throttle held at 33 to 47% for 13 s | pitch -5.6°, roll -1.9° | front 1550 to 1730 µs, rear 1100 to 1350 µs | The nose rose 9° before the kill switch was used |
+| 2026-11-26 16:14, throttle raised over 5 s | pitch -2.4°, roll -1.3° | front about 1690 µs, rear about 1390 µs | Pitch went from -2.6° to +5.8° and settled in 2 s |
+| 2026-11-26 16:42 and 16:43, throttle raised in 1 s | pitch -3.3° and -0.9° | not sampled | The vehicle levelled without overshoot. Roll and pitch were within 1.7° of level during the first second in the air. |
+
+The roll stick adds a constant command. It rests at 1491 µs against a calibrated centre
+of 1503 µs, which commands -1.0° of roll.
+
+### What was ruled out
+
+| Candidate | Evidence |
+|---|---|
+| Motor order or spin direction | Checked with the [motor test](#motor-test) on 2026-11-23 |
+| Attitude feedback with the wrong sign | In the log of 2026-11-23 at 16:17, the vehicle was tilted by up to 46° at a constant 36% throttle. On every axis the motors on the lowered side sped up. |
+| One weak motor or one ESC with a different range | The hover outputs averaged over three sessions show a front-rear difference of about 80 µs and no motor that is consistently the highest ({doc}`drone`). A difference of that size does not produce the tilt. |
+
+### Remedies
+
+- Take off in Altitude mode ([Takeoff and hover](#takeoff-and-hover)). PX4 keeps treating
+  the vehicle as landed during the thrust ramp, and the rate integrator does not run
+  while landed.
+- In Stabilized mode, raise the throttle from idle to about 70% within one second. Do not
+  go far above the hover thrust of 72%, because the vehicle then climbs quickly.
+- Run the level horizon calibration with the vehicle standing on a level takeoff surface,
+  so that the resting attitude error is small.
+- Repeat the radio calibration with the transmitter trims centred, to remove the constant
+  roll command.
+
+### Jerk after liftoff in Stabilized mode
+
+In both fast-throttle flights of 2026-11-26, roll, pitch and yaw jumped together 1.2 to
+1.3 s after liftoff, followed by a swing of 10 to 40° at about 1 Hz. The first flight
+ended when the throttle was cut to 20%. The second recovered within 1.5 s at 47 to 78%
+throttle. The vehicle tipped toward a different corner in each flight. The tether going
+taut during the climb is the suspected cause, and this was not confirmed. The onboard
+logs `21_42_24.ulg` and `21_43_41.ulg` of that day record the motion at full rate.
+
+Do not cut the throttle when the vehicle is disturbed in the air. The motors have little
+control authority at low thrust.
+
+### If the vehicle tilts for another reason
+
+Remove the propellers and work through these checks:
 
 | Candidate | Test, propellers off | Fix |
 |---|---|---|
-| Motor order or spin direction | [Motor test](#motor-test). Checked on 2026-11-23 and reported correct. | **Identify & Assign Motors**, or swap two motor wires |
-| Attitude feedback has the wrong sign | Arm in Stabilized at a quarter throttle and tip the frame by hand. The motors on the side pushed down must speed up, on all four sides. Also check that the horizon in QGroundControl reads level on a flat floor and rolls right when the vehicle is tipped right. | Correct **Autopilot Orientation**, or repeat the level horizon calibration |
-| Unequal ESC ranges | On the Actuators page, raise the slider that drives all motors together. All four must start at the same slider position and sound the same. | [ESC calibration](#esc-calibration), then the per-motor minimum |
+| Motor order or spin direction | [Motor test](#motor-test) | **Identify & Assign Motors**, or swap two motor wires |
+| Attitude feedback has the wrong sign | Arm in Stabilized at a quarter throttle and tip the frame by hand. The motors on the side pushed down must speed up, on all four sides. | Correct **Autopilot Orientation**, or repeat the level horizon calibration |
+| Unequal ESC ranges | Raise the slider that drives all motors together. All four must start at the same slider position and sound the same. | [ESC calibration](#esc-calibration), then the per-motor minimum |
 | Stick input off-centre or reversed | On the Radio page, roll and pitch must sit at the centre with the sticks released, and the roll bar must move right when the stick moves right. | Repeat the radio calibration |
 | Propeller on the wrong arm or upside down | Compare with the propeller table in {doc}`drone`. | Refit the propeller |
 | Damaged motor, ESC or wire joint | Spin each motor by hand with the battery unplugged. Then run each at about one third. A motor that stutters, grinds, will not start or gets hot is faulty. | Move the motor's three wires to a neighbouring ESC that works. If the fault moves with the motor, replace the motor. Otherwise inspect the ESC and its solder joints. |
 
-The motor test bypasses the attitude controller, so a correct motor test does not rule
-out the second row.
-
-The flight log settles the question without further tests. It records the command sent to
-each motor and the attitude, so it shows whether one motor was driven to its limit while
-its corner still dropped. Download it with **Analyze Tools**, then **Log Download**, and
-open the `.ulg` file in PlotJuggler or upload it to
-[Flight Review](https://logs.px4.io). Flight Review stores the log on a public server.
+The flight log shows the command sent to each motor and the attitude. Download it with
+**Analyze Tools**, then **Log Download**, and open the `.ulg` file in PlotJuggler or
+upload it to [Flight Review](https://logs.px4.io). Flight Review stores the log on a
+public server.
 
 ## Splicing a motor wire
 
