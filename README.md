@@ -4,7 +4,8 @@ Run trajectory-tracking experiments for the lab's Yahboom ROSMASTER R2 cars and 
 RoboMaster S1, and survey ArUco fiducials from a camera on a car with the adaptive
 estimator of the ECC 2027 paper. The project provides a standalone Python simulator (no
 ROS), a Gazebo/RViz simulator, a ROS 2 controller for the real S1 and the fiducial survey
-on a real car with the motion capture.
+on a real car with the motion capture. The documentation also records the setup of the
+lab's Q-ball quadrotor, which no package here controls yet.
 
 ## Start here
 
@@ -19,6 +20,7 @@ Read the [documentation home page](docs/index.md) for installation and the first
 | Modify the controller | [Modify the controller](docs/your-controller.md) |
 | Write a ROS 2 controller node | [Write a custom node](docs/custom-node.md) |
 | Survey fiducials with a camera on a car | [Fiducial surveying on a real car](docs/hardware-survey.md) |
+| Connect to, set up or tune the Q-ball quadrotor | [Q-ball quadrotor](docs/drone.md) |
 | Read ROS and package details | [Developer reference](docs/developer.md) |
 
 ## Quick start

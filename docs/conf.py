@@ -1,5 +1,5 @@
 
-project = "CAMS Lab Gazebo Simulator"
+project = "CAMS Lab Cooperative and Adaptive Robotics"
 author = "CAMS Lab"
 html_show_copyright = False
 
@@ -12,7 +12,7 @@ exclude_patterns = ["_build", "requirements.txt", "ode-hints.md", "estimation-hi
                     "path-estimation-hints.md", "fiducial-hints.md"]
 
 html_theme = "sphinx_rtd_theme"
-html_title = "CAMS Lab Gazebo Simulator"
+html_title = "CAMS Lab Cooperative and Adaptive Robotics"
 html_theme_options = {
     "navigation_depth": 3,
     "collapse_navigation": False,

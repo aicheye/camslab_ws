@@ -2,6 +2,9 @@
 
 Run trajectory-tracking experiments with the lab's Yahboom ROSMASTER R2 cars in Gazebo. Choose a path, inspect it in RViz and the web UI, and export each run as a CSV. Use the same controller on the real cars.
 
+The documentation also covers the fiducial survey with a camera on a real car and the
+setup of the lab's Q-ball quadrotor.
+
 ## Choose a setup
 
 Choose **host install** on Ubuntu 22.04 with ROS 2 already installed. Choose
@@ -15,6 +18,7 @@ Choose **host install** on Ubuntu 22.04 with ROS 2 already installed. Choose
 | Change a path or draw one | {doc}`paths` |
 | Configure trajectories and robots | {doc}`configuration` |
 | Survey fiducials with a camera on a car | {doc}`hardware-survey` |
+| Connect to the Q-ball quadrotor, set it up or tune it | {doc}`drone` |
 | Read ROS and package details | {doc}`developer` |
 | Fix a launch problem | {doc}`troubleshooting` |
 
@@ -42,4 +46,14 @@ hardware-survey
 developer
 troubleshooting
 how-it-works
+```
+
+```{toctree}
+:caption: Q-ball quadrotor
+:maxdepth: 2
+
+drone
+drone-connect
+drone-setup
+drone-tuning
 ```
